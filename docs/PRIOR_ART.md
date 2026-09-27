@@ -37,11 +37,34 @@ Code); it supplies instructions, skills and references so the agent can write
 analysis code, plot, and publish a report. Explicitly scientist-in-the-loop, not
 one-shot. Authors include Rossant, Chapuis, Paninski, Raiser, Winter, Harris.
 
-**[V]** Critically for us: it uses a **compressed BWM representation** — spike
-times of all high-quality neurons at 0.1 ms resolution, basic metadata including
-brain location, plus behavioural traces (stimulus/response events, wheel, video
-keypoints). All BWM experiments fit in **under 10 GB**. The agent falls back to
-the ONE API for anything else.
+**[V]** Critically for us: it uses a **compressed BWM representation**, downloaded
+from a public archive into `reports/datasets/`, made of two datasets on by
+default (confirmed from `docs/bwm/README.md` in the cloned repo, not just the
+top-level README):
+
+- **`bwm_ephys`** (v1.2.0) — public archive **6.03 GB**, 4,215 files. 139 mice,
+  459 sessions, 699 insertions, **75,395 good units** (621,733 rows in the full
+  `clusters.pqt`, matching §D's brain-wide total), 267,264 channels, 295,920
+  trials, 2,066,041 events, **4,152,659,397 spikes** written across per-insertion
+  blosc shards. Also ships per-unit peak-channel waveforms and log-binned
+  autocorrelograms. Spike times at 0.1 ms resolution, as claimed.
+- **`bwm_behavior`** (v2.0.0) — public archive **2.9 GB** (5.2 GB on disk), 480
+  files, same 459 sessions / 295,920 trials. Wheel data for all 459 sessions;
+  pose for 444/459 (96.7%), preferring Lightning Pose over DeepLabCut per camera
+  when both exist (measured: LP for 436/437 left-camera, 432/432 right-camera,
+  253/260 body-camera sessions; only 8 camera-instances are DLC-only). Ships
+  precomputed trial/wheel/pose/event-aligned feature tables plus
+  `movement_state_epochs` and `quiescence_state_epochs` parquets — i.e. some
+  target engineering (movement-state discretization) is already done for us
+  here, not something we need to invent from scratch in Phase 2.
+- **`bwm_lfp`** (v1.0.0, opt-in, not downloaded by default) — 14 GB, all 699
+  probe recordings in one HDF5, 384 ch (695 recordings) or 96 ch (4 NP2.4
+  recordings), 250 Hz (decimated from 2500 Hz).
+
+**Corrected:** "under 10 GB" is the sum of the two *default* datasets' archive
+sizes (6.03 + 2.9 ≈ 8.9 GB), not a bound on everything BWM-related — the LFP
+dataset alone is 14 GB and is correctly excluded from that figure. The agent
+falls back to the ONE API for anything else.
 
 **[V]** Explicitly scoped to preprocessed IBL spikes/task/video — not raw
 Neuropixels, not general neurodata.
@@ -60,9 +83,35 @@ This is the one that constrains your novelty. Read it before designing anything.
 
 **[V]** Multimodal, multi-task transformer unifying encoding and decoding via
 multi-task masking (neural, behavioural, within-modality, cross-modal).
-Modality-specific tokenizers convert spike counts and continuous behaviour into
-**20 ms tokens**; discrete behaviours become repeated token sequences. Adds
-**temporal, modality, and session embeddings**.
+Confirmed from `src/prepare_data.py` (`binsize: 0.02`, i.e. **20 ms bins**) and
+`src/multi_modal/encoder_embeddings.py`, `src/models/stitcher.py`:
+
+- **Tokenization is per-timestep, not per-unit.** Each 20 ms bin's *entire*
+  population spike-count vector (fixed at `n_channels` = the training config's
+  unit count, e.g. 668) is one token: linearly projected
+  (`token_embed` → activation → `projection`) up to `hidden_size`. There is no
+  per-(unit, time-bin) token — this is a **fixed population matrix**, exactly
+  the design the roadmap's Phase 5 avoids ("fixed population matrices break on
+  unit-count change"). Sequence length is capped at `max_F=100` timesteps (2 s
+  of context at 20 ms).
+- **Cross-session unit-count variation is handled by per-session "stitching"
+  layers** (`StitchEncoder`/`StitchDecoder` in `stitcher.py`), not by the shared
+  transformer: each `eid` gets its own `nn.Linear` mapping *that session's*
+  neuron count into the shared fixed-size space and back out. These per-session
+  matrices are exactly what ROADMAP.md Phase 5 flags as "a large share of its
+  parameters [that] do not transfer for free" — confirmed in code, not just
+  inferred from the paper.
+- **Session embeddings are a plain lookup table**
+  (`nn.Embedding(len(eid_lookup), hidden_size)` in `EncoderEmbeddingLayer`),
+  indexed by an `eid → index` dict built from `data/train_eids.txt` +
+  `data/test_eids.txt` at import time. They contain no session content (no
+  metadata, no computed statistic) — just a learned per-session vector. **A
+  session not in those two files has no session embedding at all**; NEDS has no
+  mechanism to infer one for a genuinely new session. This directly confirms
+  ROADMAP.md Phase 5's failure point and means "zero it / average it / infer it"
+  is a real design decision we still have to make, not a solved problem.
+- Adds **temporal** (position) and **modality** embeddings alongside the session
+  embedding, all summed into one `x_embed` added to the projected spike token.
 
 **[V]** Trained on the IBL **repeated site** dataset: 83 mice, 5 regions, 10 labs,
 standardized pipelines. Up to 73 training animals, **10 held out**, 74 training
@@ -85,6 +134,16 @@ trained to.
 uncertainty, OOD detection, session-level trust gating, selective prediction,
 arbitrary-NWB intake, or a capability report. It assumes a well-formed IBL
 session and returns a point estimate.
+
+**[V] Confirmed in code (`src/multi_modal/mm.py`, `self.mod_loss`):** losses are
+`PoissonNLLLoss` for spikes, plain `MSELoss` for wheel/whisker (continuous),
+and `CrossEntropyLoss` for choice/block (discrete). No learned variance, no
+logvar head, no ensembling, no dropout-at-inference, no temperature-scaling
+step anywhere in `src/models/` or `src/multi_modal/`. `ModelOutput`
+(`src/models/model_output.py`) carries only `loss` and `n_examples` — there is
+no field for a predictive distribution. This is not a gap we might have missed;
+the architecture has nowhere to put uncertainty. Confirms the original claim
+precisely rather than just repeating it.
 
 - **Reuse:** their split files (instant comparability), their 20 ms tokenization,
   their session-embedding trick, their baselines as your baselines.
