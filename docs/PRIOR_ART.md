@@ -62,10 +62,22 @@ cross-animal model, no calibrated uncertainty layer** (both still true) — but
 **"no decoder at all" overstates it; a narrower, single-session, uncalibrated
 stimulus decoder exists.**
 
-- **Reuse:** `SpikeData`/`RateData` as the internal spike representation; their
-  loaders; the MCP server pattern; the skill-file design patterns above (not the
-  "bounded autonomy" phrase) — the closest published precedent for our §6 LLM
-  boundary. Possibly `decoding.py`'s CV/log-loss plumbing as a reference for
+**[V] Loaded a real IBL NWB file through it** (Phase 0 task 3, 2026-09-27):
+`load_spikedata_from_nwb` on DANDI 000409's
+`sub-DY-016_ses-d23a44ef-…_desc-processed_behavior+ecephys.nwb` (1.32 GB,
+SHA-256 matching DANDI). It worked in 15 s: 1,961 units (674 on `Probe00`,
+1,287 on `Probe01`), 61,981,600 spikes, 61.1 min, 30 distinct Allen region
+names. **But it keeps only 5 per-unit attributes** (`electrode`,
+`group_name`, `location`, `location_label`, `unit_id`) out of the file's 27
+units columns. It drops `cluster_uuid` and all IBL QC metrics, and fills in a
+missing duration or start time silently. Decision: NWB intake uses `pynwb`
+directly and SpikeLab isn't a dependency (see `docs/DECISIONS.md`).
+
+- **Reuse:** `SpikeData`/`RateData` for analysis, if we ever need their
+  methods (wrap our `Session` into them). **Not** their NWB loader for intake
+  (see above). The MCP server pattern; the skill-file design patterns above
+  (not the "bounded autonomy" phrase), the closest published precedent for
+  our §6 LLM boundary. Possibly `decoding.py`'s CV/log-loss plumbing as a reference for
   our own `evaluation/`, though ours needs session/animal-level splits it does
   not have.
 - **Modify:** nothing yet. Wrap, don't fork.
@@ -279,6 +291,36 @@ curatable analyzer from one streamed 000409 processed file (898 units, 20.7M
 spikes) in ~14 s transferring ~22 MB, with the ~130 MB spike read deferred.
 
 **Implication:** do not plan a bulk download. Stream, cache the binned tensors.
+
+**[V] Backend agreement, first data point (2026-09-27).** For session
+`d23a44ef-1402-4ed7-97f5-47e9a7a504d9`, ONE (spike sorting revision
+`2024-05-06`) and DANDI 000409's processed NWB agree **exactly**: 1,961
+clusters (674 + 1,287) and 61,981,600 spikes (20,767,948 + 41,213,652). That
+is zero-tolerance agreement on counts, as the Phase 1 test requires. Facts
+Phase 1 must design around:
+
+- **Both ONE and the NWB hold all Kilosort clusters, not just IBL's good
+  units.** ibl-ai-agent's compressed BWM holds good units only (75,395 of
+  621,733 brain-wide), so its unit counts will differ **by design**. Compare
+  backends on a common unit set, matched by `cluster_uuid` (an NWB units
+  column), rather than expecting the raw counts to match. How IBL's "good"
+  label maps onto NWB's `ibl_quality_score` / `kilosort2_label` still needs
+  checking against the compressed data once it's extracted.
+- **NEDS uses all clusters too:** its pre-filter count for this session is
+  also 1,961, so it applies no IBL QC label, only its 5 Hz firing-rate floor
+  (§C). Our Phase 2 `qc/units.py` plans to use the IBL label as well, so
+  NEDS's unit set is looser than ours. Keep that in mind when comparing.
+- **The NWB units table has 27 columns** including `cluster_uuid`,
+  `ibl_quality_score`, `sliding_rp_violation`, `noise_cutoff`,
+  `presence_ratio`, `kilosort2_label`, `firing_rate`, amplitudes, drift,
+  `distance_from_probe_tip_um` and `waveform_mean`.
+- **Trial column names differ between IBL's own backends.** NWB uses
+  `gabor_stimulus_onset_time` (ONE: `stimOn_times`), `mouse_wheel_choice`
+  (ONE: `choice`), `probability_left`, `block_type`, `block_index`,
+  `wheel_movement_onset_time`, `feedback_time`, etc. Behaviour lives in NWB
+  processing modules `wheel`, `motion_energy`, `pose_estimation`, `pupil`,
+  `lick_times`, `passive_protocol`. So Phase 1 needs a column mapping layer
+  even between IBL sources, not only for foreign NWB (Phase 11).
 
 ## E. Adjacent work you must not be surprised by
 

@@ -6,6 +6,40 @@ first.
 
 ---
 
+### 2026-09-27 — NWB intake reads with `pynwb` directly; SpikeLab is not a dependency
+
+**Decision:** `neurodecoder/nwb/` and the NWB data backend read files with
+`pynwb`, which is already in the Fixed stack (§8). SpikeLab is **not** added
+as a dependency. If we later want its analysis methods (STTC, slice stacks,
+`RateData`), we wrap it by converting our `Session` into a `SpikeData`, and
+still don't fork it. That's the Phase 0 task 3 "reuse vs wrap" outcome.
+
+**Why:** This rests on actually loading DANDI 000409's processed NWB for
+session `d23a44ef-…` through SpikeLab's `load_spikedata_from_nwb`
+(2026-09-27). It works: 1,961 units and 61,981,600 spikes in 15 s, matching
+ONE exactly (see `docs/PRIOR_ART.md` §A). But for our purposes:
+1. It keeps 5 per-unit attributes out of the units table's 27 columns and
+   drops `cluster_uuid` (the key for matching units across backends) and
+   every IBL QC column `qc/` needs (`ibl_quality_score`,
+   `sliding_rp_violation`, `noise_cutoff`, `presence_ratio`, amplitudes,
+   drift).
+2. It fills gaps silently: duration is inferred from the last spike and a
+   missing start time becomes 0.0. §7 says missing means missing.
+3. Spike times are in milliseconds; our interface (ROADMAP Phase 1) uses
+   seconds, so every call would need a conversion that's easy to get wrong.
+4. It reads spikes only, no trials or behaviour, which the same file holds
+   (trials table; `wheel`, `motion_energy`, `pose_estimation`, `pupil`,
+   `lick_times` processing modules).
+
+A few lines of `pynwb` read all of it.
+
+**Alternatives considered:** Wrapping SpikeLab's loader and reading the
+missing columns separately (two readers for one file, for no gain); forking
+it (ruled out by CLAUDE.md §2).
+
+**Consequences:** One fewer dependency. The "prefer wrapping SpikeLab" rule in
+§2 still applies to *analysis*; this decision covers *intake* only.
+
 ### 2026-09-27 — Downloaded data lives in `~/data/neurodecoder`, outside the repo
 
 **Decision:** All downloaded datasets live under `~/data/neurodecoder/`, not
