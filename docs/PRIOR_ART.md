@@ -119,6 +119,27 @@ sizes (6.03 + 2.9 ≈ 8.9 GB), not a bound on everything BWM-related — the LFP
 dataset alone is 14 GB and is correctly excluded from that figure. The agent
 falls back to the ONE API for anything else.
 
+**[V] Downloaded, checksum-verified, extracted and counted** (Phase 0 task 2,
+2026-09-27). `bwm_ephys-1.2.1.tar` (6,035,916,800 bytes) and
+`bwm_behavior-2.0.0.tar` (3,111,045,120 bytes) both match the SHA-1 values
+published in ibl-ai-agent's downloader. They're extracted to
+`~/data/neurodecoder/bwm_compressed/` (5.6 GB and 2.9 GB on disk). Counted
+from the tables themselves, every documented figure matches **exactly**: 459
+sessions, 139 mice, 699 insertions, 75,395 good units, 621,733 rows in
+`clusters.pqt`, 267,264 channels, 295,920 trials, 2,066,041 events and
+4,152,659,397 spikes (summed from `spike_build_metrics.parquet`). The data
+covers **12 labs**. Corrections and additions to the docs:
+- **The downloader fetches ephys 1.2.1, but the README describes 1.2.0.** The
+  counts are identical.
+- **Trial times are float64** (`double`) in `metadata/trials.parquet`, not
+  float32 as `docs/bwm/ephys.md` says. Per-unit `firing_rate` is single
+  precision.
+- **Units are good units only:** every one of the 75,395 has `label == 1.0`.
+- **`x/y/z` are in meters relative to bregma** (ranges roughly ±0.008 m), not
+  Allen CCF µm as in the NWB electrodes table.
+- **`probe_name` is lowercase** (`probe00`, `probe01`), with multi-shank
+  insertions named like `probe00a` / `probe00b`.
+
 **[V]** Explicitly scoped to preprocessed IBL spikes/task/video — not raw
 Neuropixels, not general neurodata.
 
@@ -302,10 +323,14 @@ Phase 1 must design around:
 - **Both ONE and the NWB hold all Kilosort clusters, not just IBL's good
   units.** ibl-ai-agent's compressed BWM holds good units only (75,395 of
   621,733 brain-wide), so its unit counts will differ **by design**. Compare
-  backends on a common unit set, matched by `cluster_uuid` (an NWB units
-  column), rather than expecting the raw counts to match. How IBL's "good"
-  label maps onto NWB's `ibl_quality_score` / `kilosort2_label` still needs
-  checking against the compressed data once it's extracted.
+  backends on a common unit set rather than expecting the raw counts to match.
+  **[V] Settled on `d23a44ef` (2026-09-27):** BWM's good units are exactly the
+  NWB units with `ibl_quality_score == 1.0`, with **identical cluster IDs per
+  probe** (114 on `probe00` + 284 on `probe01` = 398). Joined on
+  `(probe_name, cluster_id)`, depths match exactly, and firing rates differ
+  by at most 3.45e-6 (BWM stores them in single precision). So the join key
+  across BWM, NWB and ONE is `(probe_name, cluster_id)`, with probe names
+  lowercased.
 - **NEDS uses all clusters too:** its pre-filter count for this session is
   also 1,961, so it applies no IBL QC label, only its 5 Hz firing-rate floor
   (§C). Our Phase 2 `qc/units.py` plans to use the IBL label as well, so

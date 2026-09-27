@@ -28,6 +28,9 @@ stand up a repo that enforces the rules in CLAUDE.md.
    3. See `docs/NEGATIVE_RESULTS.md`.
 2. Clone ibl-ai-agent. Download its compressed BWM representation. Confirm size
    and contents.
+   **Done 2026-09-27:** both archives are SHA-1 verified and extracted to
+   `~/data/neurodecoder/bwm_compressed/`, and every documented count matches
+   exactly. See `docs/PRIOR_ART.md` §B.
 3. Clone SpikeLab. Load one NWB file through it. Decide reuse vs. wrap.
 4. Find and audit SpikeProphecy. Determine whether your §3C future-prediction
    goal is already benchmarked. **If it is, cut §3C to a stretch goal.**
