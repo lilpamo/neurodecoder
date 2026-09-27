@@ -127,11 +127,17 @@ primary training source).
 
 **Consequences:** The roadmap's interface says `Session.available:
 CapabilitySet`; the class is named `Capabilities`, with the same role. What a
-unit ID is (`cluster_uuid` vs `(pid, cluster_id)`) is left to each backend
-and will be settled when the first two backends are compared. BWM stores
-trial times as float32 (about 0.5 ms resolution on an hour-long session), so
-cross-backend comparisons of trial times need a tolerance of about 1 ms,
-while counts stay exact.
+unit ID is (`cluster_uuid` vs `(pid, cluster_id)`) is left to each backend.
+BWM and NWB were later shown to share `(probe_name, cluster_id)` exactly (see
+`docs/PRIOR_ART.md` §D).
+
+**Correction (2026-09-27):** an earlier version of this entry said BWM stores
+trial times as float32 and so needs a ~1 ms comparison tolerance. That came
+from ibl-ai-agent's schema docs. The extracted `bwm_ephys` 1.2.1
+`metadata/trials.parquet` stores them as **double (float64)**, so trial times
+can be compared exactly. BWM's per-unit `firing_rate` *is* single precision
+(differs from NWB by at most 3.45e-6 on `d23a44ef`), so compare that one with
+a tolerance.
 
 ### 2026-09-27 — NWB intake reads with `pynwb` directly; SpikeLab is not a dependency
 
