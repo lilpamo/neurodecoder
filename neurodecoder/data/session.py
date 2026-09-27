@@ -26,7 +26,9 @@ TRIAL_FIELDS = (
     "contrastRight",
     "probabilityLeft",
 )
-TRIAL_TIME_FIELDS = tuple(f for f in TRIAL_FIELDS if f.endswith("_times") or f.startswith("intervals_"))
+TRIAL_TIME_FIELDS = tuple(
+    f for f in TRIAL_FIELDS if f.endswith("_times") or f.startswith("intervals_")
+)
 UNIT_FIELDS = ("probe_name", "acronym", "x", "y", "z", "depths", "label", "firing_rate")
 BEHAVIOUR_FIELDS = ("wheel", "pose", "pupil", "lick", "motion_energy")
 CANONICAL_FIELDS = frozenset(
@@ -172,7 +174,9 @@ class Session:
             t = self.trials[field].to_numpy(dtype=np.float64)
             t = t[np.isfinite(t)]
             if not self._within_bounds(t):
-                raise ValueError(f"trials.{field} has values outside time_bounds {self.time_bounds}")
+                raise ValueError(
+                    f"trials.{field} has values outside time_bounds {self.time_bounds}"
+                )
 
     def _check_behaviour(self) -> None:
         for name, series in self.behaviour.items():
