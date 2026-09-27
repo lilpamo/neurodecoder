@@ -26,6 +26,19 @@ construction, so an invalid one can't exist:
   times must fall within `time_bounds`. A span over 24 h is rejected as
   "probably milliseconds", the trap SpikeLab's loader sets.
 - Extra backend-specific columns (e.g. `cluster_uuid`) are allowed.
+- **Behaviour signals from video have one key per camera** (revised
+  2026-09-27): `motion_energy_left/right/body`, `pupil_left/right`,
+  `pose_left/right/body`, plus `wheel` and `lick`. IBL films each session with
+  three cameras at different rates (body ~30 Hz, left ~60 Hz, right ~150 Hz
+  in session `d23a44ef`), with different timestamps, so a single
+  `motion_energy` series can't hold them. The body camera doesn't see the
+  pupil, so there's no `pupil_body`. The original single-key names
+  (`motion_energy`, `pose`, `pupil`) are now rejected as unknown.
+- **Multi-channel series must name their columns.** A `TimeSeries` with
+  `(n_samples, n_channels)` data needs `channel_names` (one unique name per
+  column), and 1-D data takes none. Per-camera pose is several tracked
+  keypoints, each with x and y, and an unlabelled `(n, 10)` array would leave
+  "which column is the left paw's y?" to guesswork.
 
 **Why:** Phase 1's cross-backend tests are only meaningful if all backends
 produce the same shape of object with the same field names, and if a missing

@@ -30,7 +30,16 @@ TRIAL_TIME_FIELDS = tuple(
     f for f in TRIAL_FIELDS if f.endswith("_times") or f.startswith("intervals_")
 )
 UNIT_FIELDS = ("probe_name", "acronym", "x", "y", "z", "depths", "label", "firing_rate")
-BEHAVIOUR_FIELDS = ("wheel", "pose", "pupil", "lick", "motion_energy")
+# IBL films each session with three cameras at different rates, so video-derived
+# signals get one key per camera. The body camera does not see the pupil.
+CAMERA_SIGNALS = {
+    "motion_energy": ("left", "right", "body"),
+    "pupil": ("left", "right"),
+    "pose": ("left", "right", "body"),
+}
+BEHAVIOUR_FIELDS = ("wheel", "lick") + tuple(
+    f"{signal}_{camera}" for signal, cameras in CAMERA_SIGNALS.items() for camera in cameras
+)
 CANONICAL_FIELDS = frozenset(
     [f"trials.{f}" for f in TRIAL_FIELDS]
     + [f"units.{f}" for f in UNIT_FIELDS]
@@ -56,10 +65,12 @@ class TimeSeries:
 
     timestamps: (n_samples,) seconds, sorted.
     data: (n_samples,) or (n_samples, n_channels).
+    channel_names: one unique name per column, required when data is 2-D.
     """
 
     timestamps: np.ndarray
     data: np.ndarray
+    channel_names: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         ts = np.asarray(self.timestamps, dtype=np.float64)
@@ -70,8 +81,19 @@ class TimeSeries:
                 f"data must be (n_samples,) or (n_samples, n_channels) with "
                 f"n_samples={ts.shape[0]}, got {data.shape}"
             )
+        names = None if self.channel_names is None else tuple(self.channel_names)
+        if data.ndim == 1 and names is not None:
+            raise ValueError("channel_names given for single-channel (n_samples,) data")
+        if data.ndim == 2 and (names is None or len(names) != data.shape[1]):
+            raise ValueError(
+                f"(n_samples, n_channels) data with n_channels={data.shape[1]} needs "
+                f"that many channel_names, got {names}"
+            )
+        if names is not None and len(set(names)) != len(names):
+            raise ValueError(f"channel_names must be unique, got {names}")
         object.__setattr__(self, "timestamps", ts)
         object.__setattr__(self, "data", data)
+        object.__setattr__(self, "channel_names", names)
 
 
 @dataclass(frozen=True)
