@@ -6,6 +6,48 @@ first.
 
 ---
 
+### 2026-09-27 — Downloaded data lives in `~/data/neurodecoder`, outside the repo
+
+**Decision:** All downloaded datasets live under `~/data/neurodecoder/`, not
+in the git repo:
+
+| Path | What | Source | Checksum |
+|---|---|---|---|
+| `bwm_compressed/archives/bwm_ephys-1.2.1.tar` | ibl-ai-agent compressed BWM, spikes/units | `ibl-brain-wide-map-public` S3, `resources/ibl-agent-data/` | SHA-1 `b18c5c7a2944be510800010eb3df90aac84a2a52` |
+| `bwm_compressed/archives/bwm_behavior-2.0.0.tar` | ibl-ai-agent compressed BWM, behaviour | same | SHA-1 `1c37dd1c38d46ec80067c8a25772dfe2468a1ce1` |
+| `dandi/000409/sub-DY-016/…_ses-d23a44ef-…_desc-processed_behavior+ecephys.nwb` | DANDI 000409 processed NWB, same session as the NEDS run | DANDI asset `ecf201ee-c535-4371-a2bd-b6da93c0fbb5` | SHA-256 `563b902729aab23bf6ce3457396629521dcd2ffe9244e551ce46bf16c940dab4` |
+
+Checksums come from ibl-ai-agent's `scripts/download_datasets.py` and DANDI's
+asset metadata, and each download is verified against them.
+
+**Why:** About 10.5 GB of archives plus about 12 GB extracted shouldn't sit
+inside the repo tree (git operations, editor indexing, backups). A fixed path
+recorded here means future sessions and forks find the data rather than
+downloading it again.
+
+**Alternatives considered:** A gitignored `datasets/` folder in the repo.
+Also running ibl-ai-agent's own installer script, rejected because it writes
+config into their repo; plain `curl` plus checksum verification is more
+transparent.
+
+**Consequences:** Phase 1's `data/backends/bwm_compressed.py` and the Phase 1
+cache should take this root from config under `configs/`, not hard-code it.
+Note that ibl-ai-agent's downloader fetches **`bwm_ephys` 1.2.1**, while
+their `docs/bwm/README.md` still describes 1.2.0. Trust the extracted
+dataset's own schema/version files over their README.
+
+### 2026-09-27 — CI installs CPU-only PyTorch
+
+**Decision:** `.github/workflows/tests.yml` installs `torch` from PyTorch's CPU
+wheel index before `pip install -e ".[dev]"`.
+
+**Why:** The default PyPI `torch` wheel on Linux bundles CUDA libraries
+(about 2 GB). CI has no GPU and our Phases 0–4 need none, so CPU wheels keep
+every run fast without changing which package versions get resolved.
+
+**Consequences:** When GPU-dependent tests arrive (Phase 5+), they need a
+separate job or marker; this job stays CPU-only.
+
 ### 2026-09-27 — NEDS's loader depends on a Hugging Face org that is now empty
 
 **Decision:** Patched `load_ibl_dataset` in
