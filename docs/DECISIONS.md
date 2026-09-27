@@ -6,6 +6,61 @@ first.
 
 ---
 
+### 2026-09-27 — DANDI NWB backend mappings (`neurodecoder/data/backends/dandi_nwb.py`)
+
+**Decision:** `load_session_nwb(path)` reads DANDI 000409 `desc-processed` NWB
+files into a `Session`. For now it reads local files; streaming via `remfile`
+comes next. Every mapping was checked value by value against ONE for session
+`d23a44ef-1402-4ed7-97f5-47e9a7a504d9` (sorting revision `2024-05-06`, trials
+revision `2025-03-03`), with zero differences:
+
+| Canonical | NWB | Check against ONE |
+|---|---|---|
+| `intervals_0/1`, `stimOn/stimOff/goCue/firstMovement/response/feedback_times` | `start_time`, `stop_time`, `gabor_stimulus_onset/offset_time`, `auditory_cue_time`, `wheel_movement_onset_time`, `choice_registration_time`, `feedback_time` | max \|diff\| = 0 on all 410 trials |
+| `choice` | `mouse_wheel_choice`: `clockwise` → **+1**, `counter_clockwise` → **−1** | crosstab exact: 118 / 292, no off-diagonal |
+| `feedbackType` | `is_mouse_rewarded` True → +1, False → −1 | exact: 304 / 106 |
+| `contrastLeft/Right` | `gabor_stimulus_contrast` (**percent**) split by `gabor_stimulus_side`, ÷100, NaN off-side | exact |
+| `probabilityLeft` | `probability_left` | exact |
+| `label` | `ibl_quality_score` (0, ⅓, ⅔, 1) | equals ONE `clusters.metrics.label` |
+| `depths` | `distance_from_probe_tip_um` | equals ONE `clusters.depths` |
+| `firing_rate` | `firing_rate` | exact |
+
+- **Unit ID** is NWB's `unit_name`, e.g. `probe00_0`, i.e. probe plus ONE's
+  `cluster_id` (same order as ONE on both probes). `cluster_id`,
+  `cluster_uuid` and `location` (full Allen region name, via each unit's
+  `max_electrode`) are kept as extra columns for matching against other
+  backends. `probe_name` uses IBL's lowercase `probe00`; NWB's column says
+  `Probe00`.
+- **Unrecognised values raise.** An unknown choice string (e.g. a no-go
+  trial, of which this session has none), an unknown stimulus side, or a
+  contrast outside IBL's percent set (0, 6.25, 12.5, 25, 50, 100) raises
+  instead of being guessed. The percent check also catches a source that
+  switches to fractions.
+- **`behaviour.wheel` is the raw `WheelPosition`** (radians, 755,552 irregular
+  samples), not IBL's smoothed 1 kHz position/velocity. The smoothing filter is
+  a preprocessing choice (R6), and ROADMAP Phase 2 warns it changes wheel R².
+- **`time_bounds` is the span of all loaded data** (spikes, trial times,
+  wheel), because the processed file holds no raw recording to define it. For
+  this session that's 0.0008–3668.940 s. The wheel's last sample is 2 ms after
+  the last spike, so spike-only bounds would wrongly reject it.
+- **Declared missing, with reasons:** `units.acronym` (NWB has full region
+  names; mapping names to acronyms isn't implemented), `units.x/y/z` (NWB
+  electrode coordinates are Allen CCF µm, and the BWM convention isn't
+  verified yet), `behaviour.pose/pupil/motion_energy` (per-camera series at
+  different rates, see below), `behaviour.lick` (events, not a sampled
+  signal).
+
+**Open contract issue:** `session.py` holds one `TimeSeries` per behaviour
+field, but IBL records motion energy, pose and pupil from three cameras
+(body ~30 Hz, left ~60 Hz, right ~150 Hz) with different timestamps. Fitting
+them in needs a contract change (e.g. per-camera keys). That's outside this
+module's scope, so it's raised for a separate decision rather than worked
+around here.
+
+**Consequences:** Loading this session takes about 6 s, including full
+contract validation. The tests needing the real file are skipped in CI (the
+file is 1.3 GB and not in the repo); the mapping tests run everywhere.
+
 ### 2026-09-27 — The `Session` contract (Phase 1, `neurodecoder/data/session.py`)
 
 **Decision:** Every backend returns a `Session` that validates itself on
