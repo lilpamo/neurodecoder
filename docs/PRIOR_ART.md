@@ -11,22 +11,63 @@ van der Molen et al., bioRxiv 2026, doi 10.64898/2026.04.25.720833.
 
 **[V]** A text-to-analysis framework for spike data. Composable data structures
 (`SpikeData` holding per-unit spike times in ms; `RateData` for binned rates;
-slice stacks for event-aligned analysis) plus a skill-based agent system the
-authors describe as enforcing bounded autonomy — mandatory use of expert-vetted
-methods, correctness over efficiency, clarification-seeking on ambiguous
-requests. Loads HDF5, NWB, KiloSort/Phy, SpikeInterface. Exports to KiloSort and
-NWB. Ships an MCP server. Includes spike-sorting pipelines (Kilosort2/4, rt-sort)
-and Kubernetes batch submission.
+slice stacks for event-aligned analysis) confirmed directly in
+`src/spikelab/spikedata/{spikedata,ratedata,spikeslicestack,rateslicestack}.py`.
+Loads HDF5, NWB, KiloSort/Phy, SpikeInterface (`data_loaders/data_loaders.py`).
+Exports to KiloSort and NWB (`data_loaders/data_exporters.py`). Ships an MCP
+server (`mcp_server/`). Includes spike-sorting pipelines — Kilosort2 (MATLAB),
+Kilosort4 (PyTorch), rt-sort — and a Kubernetes batch-job CLI
+(`spikelab-batch-jobs`), all confirmed present in `src/spikelab/spike_sorting/`
+and `src/spikelab/batch_jobs/`.
 
-**[V]** Validated by benchmarking LLMs with and without the library on a
-four-task analysis pipeline, March 2026. Demonstrated across mouse Neuropixels,
-human Utah arrays, and human forebrain organoid MEA data using the same code path.
+**[V, reworded] "Bounded autonomy" is our paraphrase, not SpikeLab's own term** —
+no such phrase appears in the repo. What is verbatim in
+`skills/spikelab-analysis-implementer/SKILL.md`: a **"Correctness over
+efficiency"** section ("Always prioritize faithfully executing the user's
+request over minimizing computation time... Do not silently reduce data
+windows, downsample, skip units, coarsen bin sizes"); a **"Strict Boundary
+Rules"** section restricting the agent to a user-named analysis directory and
+forbidding edits to library code; a mandate to **use SpikeLab's own methods
+instead of reimplementing analyses** ("Do not implement custom neuroscience
+analysis logic... outside of the library"); and repeated **clarification-before-
+acting** instructions in both the analysis-implementer and spikesorter skills.
+The behaviors are real; the label is ours.
 
-**It contains no behaviour decoder, no cross-animal model, no uncertainty layer.**
+**[A, not verified by code]** The four-task LLM benchmark and the
+mouse-Neuropixels / human-Utah-array / organoid-MEA validation claim comes from
+the bioRxiv preprint text, not from anything in the cloned repo — there is no
+benchmark harness or results file in the source tree to run. Leaving this as
+**[A]**: verifying it means reading the paper's methods/results, which is a
+different task than running the code.
+
+**[Corrected] "It contains no behaviour decoder" is wrong.**
+`src/spikelab/spikedata/decoding.py` exists and is non-trivial: cross-validated
+classifier decoding (`RidgeClassifier`, `LogisticRegression`, `MLPClassifier`,
+`RandomForestClassifier` from sklearn) of categorical labels from a per-slice
+response-amplitude matrix `(n_slices, n_units)`, with cross-entropy, confusion
+matrices, regularization sweeps, latency-dependent decoding, and drift/novelty
+measures (`temporal_decoding_decay`, `novelty_per_group`,
+`distinctness_per_group`). But it is scoped narrowly and differently from what
+we need: its docstrings and variable names (`fit_model_stim_response.py`-style)
+show it decodes **stimulus identity** from **evoked responses within one
+session/preparation** — not cross-animal behaviour decoding. Cross-validation is
+leave-one-out or k-fold *within* one dataset; there is no session- or
+animal-held-out split anywhere in the module. "Probabilities" come straight from
+`predict_proba` or a softmax over `decision_function` — useful for a relative
+log-loss, explicitly documented as **not a calibrated probability**. No
+temperature scaling, no conformal sets, no ensembling. It is also not currently
+referenced by any of the agent skill files, so an agent using SpikeLab
+conversationally would not be steered toward it. Net correction: **no
+cross-animal model, no calibrated uncertainty layer** (both still true) — but
+**"no decoder at all" overstates it; a narrower, single-session, uncalibrated
+stimulus decoder exists.**
 
 - **Reuse:** `SpikeData`/`RateData` as the internal spike representation; their
-  loaders; the MCP server pattern; above all, the bounded-autonomy skill design —
-  it is the closest published precedent for our §6 LLM boundary.
+  loaders; the MCP server pattern; the skill-file design patterns above (not the
+  "bounded autonomy" phrase) — the closest published precedent for our §6 LLM
+  boundary. Possibly `decoding.py`'s CV/log-loss plumbing as a reference for
+  our own `evaluation/`, though ours needs session/animal-level splits it does
+  not have.
 - **Modify:** nothing yet. Wrap, don't fork.
 - **Do not copy:** the spike-sorting and Kubernetes layers. Out of scope.
 
@@ -196,7 +237,7 @@ spikes) in ~14 s transferring ~22 MB, with the ~130 MB spike read deferred.
 | Neural repr. | SpikeData/RateData | raw spike times 0.1 ms | 20 ms tokens + session emb. | unit tokens | 20 ms tokens + unit-metadata tokens |
 | Cross-session | n/a | n/a | **yes** | **yes** | yes (reuse) |
 | Cross-animal | n/a | n/a | **yes, 10 held out** | yes | yes (reuse) |
-| Behaviour decoding | no | ad hoc | **yes** | yes | yes (reuse) |
+| Behaviour decoding | stimulus-ID only, single-session | ad hoc | **yes** | yes | yes (reuse) |
 | Latent state | descriptive tools | no | implicit embeddings | implicit | explicit, descriptive only |
 | **Uncertainty** | no | no | **no** | no | **core** |
 | **OOD / gating** | no | no | **no** | no | **core** |
