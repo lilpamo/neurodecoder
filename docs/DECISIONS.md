@@ -6,6 +6,43 @@ first.
 
 ---
 
+### 2026-09-27 — The `Session` contract (Phase 1, `neurodecoder/data/session.py`)
+
+**Decision:** Every backend returns a `Session` that validates itself on
+construction, so an invalid one can't exist:
+- **Canonical names are IBL's ALF names**, as used by the compressed BWM
+  (`stimOn_times`, `goCue_times`, `firstMovement_times`, `response_times`,
+  `feedback_times`, `intervals_0/1`, `choice`, `feedbackType`,
+  `contrastLeft/Right`, `probabilityLeft`, plus `stimOff_times`; units:
+  `probe_name`, `acronym`, `x/y/z`, `depths`, `label`, `firing_rate`). Other
+  backends (NWB, whose names differ, see `docs/PRIOR_ART.md` §D) map *to* these.
+- **Every canonical field must be declared present or missing with a
+  reason.** Present means it exists in the data and isn't entirely NaN;
+  missing means it's absent (no placeholder column). Unknown field names are
+  rejected, which catches typos. This is §7's "missing means missing",
+  enforced in code.
+- **Times are seconds on the session clock.** Spike times and behaviour
+  timestamps must be finite and sorted, and all spike, trial and behaviour
+  times must fall within `time_bounds`. A span over 24 h is rejected as
+  "probably milliseconds", the trap SpikeLab's loader sets.
+- Extra backend-specific columns (e.g. `cluster_uuid`) are allowed.
+
+**Why:** Phase 1's cross-backend tests are only meaningful if all backends
+produce the same shape of object with the same field names, and if a missing
+field can't masquerade as data.
+
+**Alternatives considered:** Validating in a separate function that callers
+could forget to run; NWB's column names as canonical (rejected: BWM is the
+primary training source).
+
+**Consequences:** The roadmap's interface says `Session.available:
+CapabilitySet`; the class is named `Capabilities`, with the same role. What a
+unit ID is (`cluster_uuid` vs `(pid, cluster_id)`) is left to each backend
+and will be settled when the first two backends are compared. BWM stores
+trial times as float32 (about 0.5 ms resolution on an hour-long session), so
+cross-backend comparisons of trial times need a tolerance of about 1 ms,
+while counts stay exact.
+
 ### 2026-09-27 — NWB intake reads with `pynwb` directly; SpikeLab is not a dependency
 
 **Decision:** `neurodecoder/nwb/` and the NWB data backend read files with
