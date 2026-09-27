@@ -13,6 +13,7 @@ from pynwb import NWBHDF5IO
 
 from neurodecoder.data.session import (
     BEHAVIOUR_FIELDS,
+    CAMERA_SIGNALS,
     TRIAL_FIELDS,
     TRIAL_TIME_FIELDS,
     UNIT_FIELDS,
@@ -55,15 +56,12 @@ _MISSING_UNITS = {
     "y": _COORDS_REASON,
     "z": _COORDS_REASON,
 }
-_MULTI_CAMERA_REASON = (
-    "recorded per camera at different rates; the Session contract holds one TimeSeries per field"
-)
 _MISSING_BEHAVIOUR = {
-    "pose": _MULTI_CAMERA_REASON,
-    "pupil": _MULTI_CAMERA_REASON,
-    "motion_energy": _MULTI_CAMERA_REASON,
-    "lick": "lick times are events, not a sampled signal; not loaded",
+    f"{signal}_{camera}": "present in the NWB file; not loaded by this backend yet"
+    for signal, cameras in CAMERA_SIGNALS.items()
+    for camera in cameras
 }
+_MISSING_BEHAVIOUR["lick"] = "lick times are events, not a sampled signal; not loaded"
 
 
 def _map_choice(values: pd.Series) -> np.ndarray:

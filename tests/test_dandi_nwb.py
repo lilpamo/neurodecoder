@@ -128,5 +128,11 @@ def test_capabilities_are_explicit(session):
     caps = session.available
     for field in ["trials.stimOn_times", "trials.choice", "units.label", "units.depths"]:
         assert field in caps.present
-    for field in ["units.acronym", "units.x", "behaviour.pose", "behaviour.motion_energy"]:
+    for field in [
+        "units.acronym",
+        "units.x",
+        "behaviour.pose_left",
+        "behaviour.motion_energy_body",
+        "behaviour.pupil_right",
+    ]:
         assert caps.missing[field]

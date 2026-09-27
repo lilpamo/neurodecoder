@@ -46,16 +46,18 @@ revision `2025-03-03`), with zero differences:
 - **Declared missing, with reasons:** `units.acronym` (NWB has full region
   names; mapping names to acronyms isn't implemented), `units.x/y/z` (NWB
   electrode coordinates are Allen CCF µm, and the BWM convention isn't
-  verified yet), `behaviour.pose/pupil/motion_energy` (per-camera series at
-  different rates, see below), `behaviour.lick` (events, not a sampled
-  signal).
+  verified yet), the per-camera `behaviour.motion_energy_*`, `pupil_*` and
+  `pose_*` fields (present in the file, not loaded by this backend yet), and
+  `behaviour.lick` (events, not a sampled signal).
 
-**Open contract issue:** `session.py` holds one `TimeSeries` per behaviour
-field, but IBL records motion energy, pose and pupil from three cameras
-(body ~30 Hz, left ~60 Hz, right ~150 Hz) with different timestamps. Fitting
-them in needs a contract change (e.g. per-camera keys). That's outside this
-module's scope, so it's raised for a separate decision rather than worked
-around here.
+**Resolved contract issue:** the first version of this backend couldn't hold
+IBL's three cameras (body ~30 Hz, left ~60 Hz, right ~150 Hz, with different
+timestamps), because the `Session` contract had one `TimeSeries` per field.
+The contract now has one key per camera (see "The `Session` contract"). This
+backend declares those keys missing until it loads them; the NWB series to
+read are `motion_energy/{Body,Left,Right}CameraMotionEnergy`,
+`pupil/{Left,Right}PupilDiameter` (raw, not `...Smoothed`) and
+`pose_estimation/{Body,Left,Right}Camera/*`.
 
 **Consequences:** Loading this session takes about 6 s, including full
 contract validation. The tests needing the real file are skipped in CI (the
