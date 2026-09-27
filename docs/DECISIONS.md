@@ -6,6 +6,35 @@ first.
 
 ---
 
+### 2026-09-27 — NEDS data prep loops forever on macOS unless forced to `fork`
+
+**Decision:** Patched `external/NEDS/src/prepare_data.py` to call
+`multiprocessing.set_start_method("fork", force=True)` right after its stdlib
+imports. Local patch to a gitignored clone, as with the `SessionLoader` fix.
+
+**Why:** `src/utils/ibl_data_utils.py` creates a `multiprocessing.Pool` in
+three places (lines 201, 458, 491), even with `n_workers=1`, and
+`prepare_data.py` has no `if __name__ == "__main__":` guard. macOS defaults
+to the `spawn` start method, so every pool worker re-imports and re-executes
+the whole script: it re-downloads session data, fails to start its own pool
+(`RuntimeError: An attempt has been made to start a new process before the
+current process has finished its bootstrapping phase`), dies, and the parent
+pool respawns it. **The parent never exits.** One run did this silently for
+2.5 hours (532 `RuntimeError`s in its log), downloading into the same cache
+directory a later run was using. NEDS was developed on Linux SLURM clusters,
+where the default is `fork`, so this never shows up there.
+
+**Alternatives considered:** Adding a `__main__` guard (more invasive, since
+the whole script body is top-level code); running on Linux (not available).
+
+**Consequences:** Anyone reproducing NEDS on macOS needs this patch. More
+generally: **a crashing child process does not mean the job exited.** Before
+relaunching any background data job, check with `pgrep` that the previous
+one is gone, and write the exit code to the log instead of trusting a piped
+command's status (`cmd | tail` reports `tail`'s exit code, which is how the
+first `SessionLoader` crash showed up as "exit 0"). Data written while two
+runs shared a cache directory was discarded and re-downloaded, not reused.
+
 ### 2026-09-27 — `ONE-api`/`ibllib` installs on this machine need llvmlite/numba pinned first
 
 **Decision:** Before installing `ONE-api`, `ibllib`, or anything that pulls in

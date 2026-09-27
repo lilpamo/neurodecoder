@@ -66,7 +66,8 @@ invalidates caches. Never change these silently to improve a metric.
 ## 4. Before writing code in any session
 
 1. Read `docs/ROADMAP.md` and identify which phase we are in.
-2. Read `docs/DECISIONS.md` for decisions already made.
+2. Read `docs/DECISIONS.md` for decisions already made and
+   `docs/NEGATIVE_RESULTS.md` for what has already been tried and failed.
 3. State, in chat, the one module you are about to touch and what test will prove
    it works.
 4. Do not touch modules outside that scope. If a change requires it, stop and say
