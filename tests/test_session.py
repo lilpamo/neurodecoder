@@ -26,7 +26,11 @@ def _capabilities(present_extra=(), missing_extra=None):
     present = {f"trials.{f}" for f in TRIAL_FIELDS}
     present |= {f"units.{f}" for f in UNIT_FIELDS}
     present |= {"behaviour.wheel", *present_extra}
-    missing = {f"behaviour.{f}": "not in fixture" for f in BEHAVIOUR_FIELDS if f != "wheel"}
+    missing = {
+        f"behaviour.{f}": "not in fixture"
+        for f in BEHAVIOUR_FIELDS
+        if f"behaviour.{f}" not in present
+    }
     missing.update(missing_extra or {})
     return Capabilities(present=frozenset(present - set(missing)), missing=missing)
 
@@ -160,6 +164,56 @@ def test_timeseries_timestamps_must_be_sorted():
         TimeSeries(np.array([1.0, 0.0]), np.array([0.0, 0.5]))
 
 
-def test_timeseries_accepts_multichannel_data():
-    ts = TimeSeries(np.array([0.0, 1.0, 2.0]), np.zeros((3, 4)))
+def test_timeseries_accepts_named_multichannel_data():
+    names = ("nose_x", "nose_y", "paw_x", "paw_y")
+    ts = TimeSeries(np.array([0.0, 1.0, 2.0]), np.zeros((3, 4)), channel_names=names)
     assert ts.data.shape == (3, 4)
+    assert ts.channel_names == names
+
+
+def test_multichannel_timeseries_requires_channel_names():
+    with pytest.raises(ValueError, match="channel_names"):
+        TimeSeries(np.array([0.0, 1.0]), np.zeros((2, 3)))
+
+
+def test_channel_names_must_match_columns():
+    with pytest.raises(ValueError, match="channel_names"):
+        TimeSeries(np.array([0.0, 1.0]), np.zeros((2, 3)), channel_names=("a", "b"))
+
+
+def test_channel_names_must_be_unique():
+    with pytest.raises(ValueError, match="unique"):
+        TimeSeries(np.array([0.0, 1.0]), np.zeros((2, 2)), channel_names=("a", "a"))
+
+
+def test_single_channel_timeseries_takes_no_channel_names():
+    with pytest.raises(ValueError, match="channel_names"):
+        TimeSeries(np.array([0.0, 1.0]), np.zeros(2), channel_names=("a",))
+
+
+def test_cameras_have_separate_keys_and_sampling_rates():
+    left = TimeSeries(np.array([0.0, 0.5, 1.0]), np.array([1.0, 2.0, 3.0]))
+    body = TimeSeries(np.array([0.1, 1.1]), np.array([4.0, 5.0]))
+    behaviour = {
+        "wheel": TimeSeries(np.array([0.0, 1.0]), np.array([0.0, 0.5])),
+        "motion_energy_left": left,
+        "motion_energy_body": body,
+    }
+    caps = _capabilities(
+        present_extra={"behaviour.motion_energy_left", "behaviour.motion_energy_body"}
+    )
+    s = make_session(behaviour=behaviour, available=caps)
+    assert s.behaviour["motion_energy_left"].timestamps.shape == (3,)
+    assert s.behaviour["motion_energy_body"].timestamps.shape == (2,)
+
+
+def test_single_camera_agnostic_key_is_not_canonical():
+    caps = _capabilities(missing_extra={"behaviour.motion_energy": "old single key"})
+    with pytest.raises(ValueError, match="unknown"):
+        make_session(available=caps)
+
+
+def test_pupil_has_no_body_camera():
+    caps = _capabilities(missing_extra={"behaviour.pupil_body": "body camera sees no pupil"})
+    with pytest.raises(ValueError, match="unknown"):
+        make_session(available=caps)
