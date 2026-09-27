@@ -186,7 +186,78 @@ no field for a predictive distribution. This is not a gap we might have missed;
 the architecture has nowhere to put uncertainty. Confirms the original claim
 precisely rather than just repeating it.
 
-- **Reuse:** their split files (instant comparability), their 20 ms tokenization,
+**[V] Data prep, from actually running `src/prepare_data.py`** on held-out test
+session `d23a44ef-1402-4ed7-97f5-47e9a7a504d9` (2026-09-27, after the
+environment patches in `docs/DECISIONS.md`):
+
+- **Trial-aligned windows, not continuous time.** Each sample is one trial,
+  from −0.5 s to +1.5 s around `stimOn_times`, in 100 bins of 20 ms. This
+  session: 410 trials × 100 bins × 1,961 units before filtering.
+- **Unit filter uses a 5 Hz floor, not 0.2 Hz.** The config says
+  `fr_thresh: 0.2`, but the code keeps units with mean rate `> 1/fr_thresh`,
+  i.e. 5 Hz. 884 of 1,961 units survived. **The filter runs on all 410 trials
+  before the split**, so test trials take part in unit selection. It's
+  unsupervised (no labels used), so the leak is mild, but our `qc/` must not
+  do this (R3).
+- **The within-session split breaks our split rules.** Trials are shuffled at
+  random (`np.random.choice`, global `np.random.seed(42)`) and sliced
+  70/10/20 into train/val/test. That keeps whole trials together, which our
+  "trial-level targets split on trials" rule allows. But it **interleaves
+  trials with no temporal blocking and no gap**, against the Blocking and Gap
+  rules in `SPLITS_AND_LEAKAGE.md`. The neighbours of each test trial,
+  including trials in the same IBL block, sit in the training set. **Expected
+  consequence (not measured yet):** NEDS's single-session numbers, block prior
+  especially, should come out higher than our `ceiling_within` computed under
+  our rules. Don't read a gap between the two as our model underperforming.
+- **Revision drift: ONE silently loads the newest data revision.** On disk:
+  spike sorting is `#2024-05-06#` (before the paper); the trials table,
+  including the `stimOn_times` every window is aligned to, is `#2025-03-03#`
+  (one month before the April 2025 preprint); motion energy for the left,
+  right and body cameras is `#2025-05-30#`, `#2025-05-31#` and `#2025-06-02#`
+  (**after** the preprint). NEDS's whisker-motion-energy target was therefore
+  built from different files than a fresh download gets today, and the
+  alignment times may differ too. **An exact match to a published NEDS number
+  is not guaranteed even with correct code.** A mismatch may come from data
+  revisions, not our setup. For our Phase 1 cache key, see ROADMAP.md
+  Phase 1: "dataset revisions change under you". This is a concrete instance
+  of it.
+
+**[V] Training, from a 1-epoch smoke test** (same session, 2026-09-27):
+
+- **The full pipeline runs end to end** after four local patches (see
+  `docs/DECISIONS.md`): `prepare_data.py` → `create_dataset.py` → `train.py`
+  → per-modality validation metrics and checkpoints. Real exit code 0.
+- **On this Mac it ran on Apple's GPU (MPS), not the CPU.** PyTorch/accelerate
+  picked `mps:0` automatically. The paper used CUDA, so small numerical
+  differences are possible.
+- **Cost:** 16 training steps per epoch (249 training trials, batch 16), about
+  1 s per step once warmed up (the first step takes 28 s). The default is 2,000
+  epochs with evaluation after every epoch, so roughly **11–14 hours per
+  session** on this machine. That's an estimate: evaluation and checkpoint
+  saving weren't timed separately.
+- **The 1-epoch metrics are chance level and must not be quoted** (choice
+  0.50, block 0.33, negative wheel/whisker R²). They show the pipeline runs,
+  nothing about performance.
+- **Validation (used for checkpoint selection) uses balanced accuracy**
+  (`src/trainer/base.py:490`); evaluation computes both plain and balanced
+  accuracy (`src/utils/eval_utils.py:464–465`). The paper text says
+  "classification accuracy". When comparing against our contract (§5 requires
+  balanced accuracy), use NEDS's balanced-accuracy output explicitly.
+
+**[V, partly via paper summary] A single-session reproduction of a published
+number isn't possible as specified.** From the arXiv HTML (checked
+2026-09-27): single-session results are reported **only as averages and
+distributions over the 10 held-out sessions**. Figure 2B shows a per-session
+scatter plot, but the sessions aren't identified by eid. The reported numbers
+also come from a random hyperparameter search over **50** models (the repo's
+`train.sh` defaults to 30). The repo contains **no linear or reduced-rank
+baseline code**, so the paper's baseline numbers can't be regenerated from
+it either. Approximate averages read off Figure 2A by a summarisation tool
+were **not** recorded here because they aren't verified.
+
+- **Reuse:** their session-level split files (`train_eids.txt`/`test_eids.txt`,
+  instant comparability) but **not** their within-session trial split (see
+  above: random and interleaved, no gap), their 20 ms tokenization,
   their session-embedding trick, their baselines as your baselines.
 - **Modify:** their decoder heads to emit distributions rather than points.
 - **Do not copy:** the pretraining scale. You cannot match it and do not need to.

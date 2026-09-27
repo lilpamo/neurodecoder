@@ -6,6 +6,39 @@ first.
 
 ---
 
+### 2026-09-27 — NEDS's loader depends on a Hugging Face org that is now empty
+
+**Decision:** Patched `load_ibl_dataset` in
+`external/NEDS/src/utils/dataset_utils.py` (its only
+`get_user_datasets(...)` call, line 209) to list the local `*_aligned`
+directories under `cache_dir` instead of querying Hugging Face. Same
+`org/eid_aligned` format, so the rest of the loader is unchanged. It is a
+local patch to a gitignored clone.
+
+**Why:** `get_user_datasets` calls `datasets.list_datasets()`, which pages
+through every public dataset on Hugging Face, then filters to
+`ibl-repro-ephys/`. The list is used only to check that the eid is
+"published". The data itself is then read from local disk
+(`load_from_disk(f"{cache_dir}/{eid}_aligned")`), i.e. whatever NEDS's own
+`prepare_data.py` wrote. Two failures stack up:
+(1) paging all of Hugging Face without logging in hits `HTTP 429 Too Many
+Requests`; (2) even with no rate limit, a targeted query
+(`HfApi().list_datasets(author="ibl-repro-ephys")`) returns **0 datasets**, so
+the check would raise `ValueError: ... not found in the user's datasets`.
+`create_dataset.py` and `train.py` both go through this loader, so NEDS's
+training pipeline cannot run for an outside user without this patch, whatever
+the package versions.
+
+**Alternatives considered:** Pinning versions (doesn't help: the dependency is
+on an external org's contents, not a package API); requesting access to the
+org (unknown if it still exists privately).
+
+**Consequences:** The data being trained on is exactly what `prepare_data.py`
+produced locally, which was verified: prep's train/val/test rows
+(249/36/72) match `create_dataset.py`'s written files exactly. Fourth NEDS
+environment break so far; each has been a distinct cause (native build,
+`ibllib` API, macOS `spawn`, Hugging Face org), not the same one repeating.
+
 ### 2026-09-27 — NEDS data prep loops forever on macOS unless forced to `fork`
 
 **Decision:** Patched `external/NEDS/src/prepare_data.py` to call
@@ -60,10 +93,15 @@ without this pin.
 
 ### 2026-09-27 — NEDS's `SessionLoader` call is incompatible with current `ibllib`
 
-**Decision:** Patched one line in `external/NEDS/src/utils/ibl_data_utils.py`
-(`SessionLoader(one, eid=eid)` → `SessionLoader(one=one, eid=eid)`) to keep the
+**Decision:** Patched both `SessionLoader` call sites in
+`external/NEDS/src/utils/ibl_data_utils.py` (lines 107 and 263:
+`SessionLoader(one, eid=eid)` → `SessionLoader(one=one, eid=eid)`) to keep the
 Phase 0 reproduction attempt moving. This is a local patch to a gitignored
-external clone, not a change to our own code.
+external clone, not a change to our own code. The first attempt patched only
+line 107. Line 263 runs inside a pool worker and crashed the next run, so when
+fixing an API break, grep for every call site first. The other IBL calls in
+that file (`SpikeSortingLoader`, `BrainRegions`, `get_spike_counts_in_bins`)
+were checked against `ibllib` 4.0.1 and are compatible.
 
 **Why:** `external/NEDS` (cloned per the Phase 0 audit) pins `ibllib`
 unversioned in `env.yaml`, so a fresh install pulls current `ibllib` (4.0.1).

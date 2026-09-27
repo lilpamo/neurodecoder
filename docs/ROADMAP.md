@@ -21,6 +21,11 @@ stand up a repo that enforces the rules in CLAUDE.md.
 **Tasks.**
 1. Clone and *run* NEDS. Reproduce one decoding number from the paper on one
    session. Record what broke.
+   **Amended 2026-09-27:** closed as a negative result. The pipeline runs end
+   to end after four patches, but the paper publishes only 10-session averages
+   (with a 50-model hyperparameter search) and no baseline code, so there is
+   no per-session number to reproduce. The numeric comparison moves to Phase
+   3. See `docs/NEGATIVE_RESULTS.md`.
 2. Clone ibl-ai-agent. Download its compressed BWM representation. Confirm size
    and contents.
 3. Clone SpikeLab. Load one NWB file through it. Decide reuse vs. wrap.
@@ -32,7 +37,9 @@ stand up a repo that enforces the rules in CLAUDE.md.
    `docs/NEGATIVE_RESULTS.md` (empty, with a template).
 
 **Outputs.** `docs/PRIOR_ART.md` with every `[A]` promoted to `[V]` or corrected.
-One reproduced number from NEDS. A repo that passes `pytest` on an empty suite.
+~~One reproduced number from NEDS.~~ NEDS's pipeline run end to end, with its
+breakages recorded (amended 2026-09-27, see task 1). A repo that passes
+`pytest` on an empty suite.
 
 **Success criteria.** You can state, in one sentence each, what NEDS does that
 you will reuse and what it does not do that you will add. If you cannot, you are
@@ -150,6 +157,12 @@ boundary: split on trials, not bins, for trial-level targets.
   behavioural series, timestamps, rates). No normalization, no model. Run it
   against 000409 files and 3–5 unrelated dandisets.
 - `cli/evaluate.py`.
+- **NEDS comparison (moved from Phase 0, 2026-09-27).** Run the baselines on
+  NEDS's 10 held-out test sessions (`external/NEDS/data/test_eids.txt`) and
+  compare against the paper's reported 10-session averages. Use balanced
+  accuracy explicitly for choice/block. Remember that NEDS's within-session
+  split is random-interleaved with no gap, so its numbers are expected to sit
+  above our `ceiling_within`. See `docs/PRIOR_ART.md` §C.
 
 **Success criteria.** Wheel-velocity R² and choice accuracy on a within-session
 split that are in the same ballpark as published IBL linear baselines. The
