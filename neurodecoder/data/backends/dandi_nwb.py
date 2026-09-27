@@ -6,6 +6,7 @@ Values outside the checked encodings raise instead of being guessed.
 """
 
 import os
+import re
 
 import numpy as np
 import pandas as pd
@@ -56,12 +57,23 @@ _MISSING_UNITS = {
     "y": _COORDS_REASON,
     "z": _COORDS_REASON,
 }
-_MISSING_BEHAVIOUR = {
-    f"{signal}_{camera}": "present in the NWB file; not loaded by this backend yet"
-    for signal, cameras in CAMERA_SIGNALS.items()
-    for camera in cameras
+# Canonical behaviour key -> (processing module, data interface) in the NWB file.
+# Pupil is the raw diameter, not the `...Smoothed` series: smoothing is preprocessing.
+_NWB_CAMERA = {"left": "Left", "right": "Right", "body": "Body"}
+_NWB_SIGNAL = {
+    "motion_energy": ("motion_energy", "{cam}CameraMotionEnergy"),
+    "pupil": ("pupil", "{cam}PupilDiameter"),
+    "pose": ("pose_estimation", "{cam}Camera"),
 }
-_MISSING_BEHAVIOUR["lick"] = "lick times are events, not a sampled signal; not loaded"
+_BEHAVIOUR_SOURCES = {"wheel": ("wheel", "WheelPosition")}
+for _signal, _cameras in CAMERA_SIGNALS.items():
+    _module, _name = _NWB_SIGNAL[_signal]
+    for _camera in _cameras:
+        _BEHAVIOUR_SOURCES[f"{_signal}_{_camera}"] = (
+            _module,
+            _name.format(cam=_NWB_CAMERA[_camera]),
+        )
+_LICK_REASON = "lick times are events, not a sampled signal; not loaded"
 
 
 def _map_choice(values: pd.Series) -> np.ndarray:
@@ -142,6 +154,51 @@ def _units_and_spikes(nwb) -> tuple[pd.DataFrame, dict[str, np.ndarray]]:
     return table, spikes
 
 
+def _keypoint_name(series_name: str) -> str:
+    """'PoseEstimationSeriesRightPupilBottom' -> 'right_pupil_bottom'."""
+    name = series_name.removeprefix("PoseEstimationSeries")
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+def _pose(camera) -> TimeSeries:
+    """One camera's keypoints as (n_samples, n_channels): x, y (px) and likelihood per keypoint.
+
+    Likelihood is kept unthresholded; filtering low-confidence points is preprocessing.
+    """
+    series = camera.pose_estimation_series
+    names = sorted(series, key=_keypoint_name)
+    timestamps = np.asarray(series[names[0]].timestamps[:], dtype=np.float64)
+    columns, channel_names = [], []
+    for name in names:
+        s = series[name]
+        if not np.array_equal(np.asarray(s.timestamps[:], dtype=np.float64), timestamps):
+            raise ValueError(f"{camera.name}: keypoint {name} has its own timestamps; cannot stack")
+        xy = np.asarray(s.data[:], dtype=np.float64)
+        keypoint = _keypoint_name(name)
+        columns += [xy[:, 0], xy[:, 1]]
+        channel_names += [f"{keypoint}_x", f"{keypoint}_y"]
+        if s.confidence is not None:
+            columns.append(np.asarray(s.confidence[:], dtype=np.float64))
+            channel_names.append(f"{keypoint}_likelihood")
+    return TimeSeries(timestamps, np.column_stack(columns), channel_names=tuple(channel_names))
+
+
+def _behaviour(nwb) -> tuple[dict[str, TimeSeries], dict[str, str]]:
+    loaded, missing = {}, {"lick": _LICK_REASON}
+    for key, (module, name) in _BEHAVIOUR_SOURCES.items():
+        if module not in nwb.processing or name not in nwb.processing[module].data_interfaces:
+            missing[key] = f"no {module}/{name} in this NWB file"
+            continue
+        obj = nwb.processing[module][name]
+        if key.startswith("pose_"):
+            loaded[key] = _pose(obj)
+            continue
+        if obj.timestamps is None:
+            raise ValueError(f"{module}/{name} is rate-sampled, without timestamps; not supported")
+        loaded[key] = TimeSeries(obj.timestamps[:], obj.data[:])
+    return loaded, missing
+
+
 def _time_bounds(spikes, trials: pd.DataFrame, behaviour: dict[str, TimeSeries]) -> tuple:
     firsts = [t[0] for t in spikes.values() if t.size]
     lasts = [t[-1] for t in spikes.values() if t.size]
@@ -167,7 +224,8 @@ def load_session_nwb(path: str | os.PathLike) -> Session:
     """Read one DANDI 000409 `desc-processed` NWB file into a Session.
 
     Spike times and all other times are seconds on the session clock. The wheel is
-    the raw encoder position (radians); smoothing belongs to preprocessing.
+    the raw encoder position (radians) and pupil the raw diameter; smoothing belongs
+    to preprocessing. Video signals get one entry per camera, each on its own clock.
     """
     with NWBHDF5IO(str(path), "r", load_namespaces=True) as io:
         nwb = io.read()
@@ -175,12 +233,11 @@ def load_session_nwb(path: str | os.PathLike) -> Session:
             raise ValueError(f"{path}: NWB session_id (the IBL eid) is missing")
         units, spikes = _units_and_spikes(nwb)
         trials = _trials(nwb)
-        position = nwb.processing["wheel"]["WheelPosition"]
-        behaviour = {"wheel": TimeSeries(position.timestamps[:], position.data[:])}
+        behaviour, missing_behaviour = _behaviour(nwb)
         eid = str(nwb.session_id)
 
     missing = {f"units.{f}": why for f, why in _MISSING_UNITS.items()}
-    missing.update({f"behaviour.{f}": why for f, why in _MISSING_BEHAVIOUR.items()})
+    missing.update({f"behaviour.{f}": why for f, why in missing_behaviour.items()})
     trials = _drop_all_nan(trials, "trials", TRIAL_FIELDS, missing)
     units = _drop_all_nan(units, "units", UNIT_FIELDS, missing)
 

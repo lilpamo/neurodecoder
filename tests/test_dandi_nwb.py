@@ -1,13 +1,16 @@
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from neurodecoder.data.backends.dandi_nwb import (
+    _keypoint_name,
     _map_choice,
     _map_feedback,
+    _pose,
     _split_contrast,
     load_session_nwb,
 )
@@ -57,6 +60,45 @@ def test_contrast_split_rejects_fractions():
     # NWB stores percent; a 0-1 value here means the source changed convention.
     with pytest.raises(ValueError, match="percent"):
         _split_contrast(pd.Series(["left", "right"]), pd.Series([0.25, 0.5]))
+
+
+def test_keypoint_names_are_snake_case():
+    assert _keypoint_name("PoseEstimationSeriesRightPupilBottom") == "right_pupil_bottom"
+    assert _keypoint_name("PoseEstimationSeriesTailStart") == "tail_start"
+
+
+def _keypoint(timestamps, n):
+    return SimpleNamespace(
+        timestamps=np.asarray(timestamps, dtype=float),
+        data=np.arange(2 * n, dtype=float).reshape(n, 2),
+        confidence=np.full(n, 0.9),
+    )
+
+
+def test_pose_stacks_keypoints_with_named_columns():
+    series = {
+        "PoseEstimationSeriesNoseTip": _keypoint([0.0, 1.0], 2),
+        "PoseEstimationSeriesLeftPaw": _keypoint([0.0, 1.0], 2),
+    }
+    ts = _pose(SimpleNamespace(name="LeftCamera", pose_estimation_series=series))
+    assert ts.channel_names == (
+        "left_paw_x",
+        "left_paw_y",
+        "left_paw_likelihood",
+        "nose_tip_x",
+        "nose_tip_y",
+        "nose_tip_likelihood",
+    )
+    assert ts.data.shape == (2, 6)
+
+
+def test_pose_rejects_keypoints_on_different_clocks():
+    series = {
+        "PoseEstimationSeriesNoseTip": _keypoint([0.0, 1.0], 2),
+        "PoseEstimationSeriesLeftPaw": _keypoint([0.0, 2.0], 2),
+    }
+    with pytest.raises(ValueError, match="timestamps"):
+        _pose(SimpleNamespace(name="LeftCamera", pose_estimation_series=series))
 
 
 @pytest.fixture(scope="module")
@@ -124,15 +166,57 @@ def test_time_bounds_span_all_loaded_data(session):
 
 
 @needs_nwb
+def test_motion_energy_has_one_series_per_camera(session):
+    sizes = {
+        cam: session.behaviour[f"motion_energy_{cam}"].timestamps.size
+        for cam in ("body", "left", "right")
+    }
+    assert sizes == {"body": 109_866, "left": 218_896, "right": 548_105}
+
+
+@needs_nwb
+def test_pupil_is_the_raw_series(session):
+    from pynwb import NWBHDF5IO
+
+    with NWBHDF5IO(str(NWB_PATH), "r", load_namespaces=True) as io:
+        raw = io.read().processing["pupil"]["LeftPupilDiameter"].data[:]
+    np.testing.assert_array_equal(session.behaviour["pupil_left"].data, raw)
+    assert "pupil_body" not in session.behaviour
+
+
+@needs_nwb
+def test_pose_columns_are_named_per_keypoint(session):
+    body = session.behaviour["pose_body"]
+    assert body.channel_names == ("tail_start_x", "tail_start_y", "tail_start_likelihood")
+    assert body.data.shape == (109_866, 3)
+    assert session.behaviour["pose_left"].data.shape == (218_896, 18)
+    right = session.behaviour["pose_right"]
+    assert right.data.shape == (548_105, 33)
+    assert "nose_tip_x" in right.channel_names
+
+
+@needs_nwb
+def test_camera_signals_share_their_camera_clock(session):
+    b = session.behaviour
+    for cam in ("left", "right"):
+        clock = b[f"motion_energy_{cam}"].timestamps
+        np.testing.assert_array_equal(b[f"pose_{cam}"].timestamps, clock)
+        np.testing.assert_array_equal(b[f"pupil_{cam}"].timestamps, clock)
+
+
+@needs_nwb
 def test_capabilities_are_explicit(session):
     caps = session.available
-    for field in ["trials.stimOn_times", "trials.choice", "units.label", "units.depths"]:
-        assert field in caps.present
     for field in [
-        "units.acronym",
-        "units.x",
+        "trials.stimOn_times",
+        "trials.choice",
+        "units.label",
+        "units.depths",
+        "behaviour.wheel",
         "behaviour.pose_left",
         "behaviour.motion_energy_body",
         "behaviour.pupil_right",
     ]:
+        assert field in caps.present
+    for field in ["units.acronym", "units.x", "behaviour.lick"]:
         assert caps.missing[field]

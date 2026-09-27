@@ -46,18 +46,38 @@ revision `2025-03-03`), with zero differences:
 - **Declared missing, with reasons:** `units.acronym` (NWB has full region
   names; mapping names to acronyms isn't implemented), `units.x/y/z` (NWB
   electrode coordinates are Allen CCF µm, and the BWM convention isn't
-  verified yet), the per-camera `behaviour.motion_energy_*`, `pupil_*` and
-  `pose_*` fields (present in the file, not loaded by this backend yet), and
-  `behaviour.lick` (events, not a sampled signal).
+  verified yet), and `behaviour.lick` (events, not a sampled signal).
+- **Per-camera video signals are loaded**, one key per camera, each on its own
+  clock:
+  - `motion_energy_{left,right,body}` come from
+    `motion_energy/{Left,Right,Body}CameraMotionEnergy`.
+  - `pupil_{left,right}` come from the **raw** `pupil/{Left,Right}PupilDiameter`,
+    not `...Smoothed`, because smoothing is preprocessing (R6). The NaNs in it
+    are kept (25 left, 221 right in `d23a44ef`).
+  - `pose_{left,right,body}` come from `pose_estimation/{Left,Right,Body}Camera`.
+    Each camera's keypoints are stacked into one series with named columns
+    `{keypoint}_x`, `{keypoint}_y` (px) and `{keypoint}_likelihood`, keypoints
+    in alphabetical order (body 1, left 6, right 11 in `d23a44ef`).
+  - The **likelihood is kept unthresholded**, matching ibl-ai-agent's
+    `likelihood_thr=0`, because filtering low-confidence points is a
+    preprocessing choice.
+  - Keypoint names are NWB's series names in snake_case
+    (`RightPupilBottom` → `right_pupil_bottom`), taken as the file gives them.
+    Matching them to BWM's pose naming is a cross-backend question for later.
+- **Checked before stacking:** within each camera, every pose keypoint shares
+  exactly the same timestamps, and those equal the camera's motion-energy and
+  pupil timestamps. The backend raises if a keypoint is on its own clock, and
+  it rejects rate-sampled series without timestamps rather than rebuilding
+  them.
+- **A signal absent from a file is declared missing** ("no `module/name` in
+  this NWB file") instead of raising. About 4% of BWM sessions have no pose,
+  per ibl-ai-agent's docs.
 
 **Resolved contract issue:** the first version of this backend couldn't hold
 IBL's three cameras (body ~30 Hz, left ~60 Hz, right ~150 Hz, with different
 timestamps), because the `Session` contract had one `TimeSeries` per field.
-The contract now has one key per camera (see "The `Session` contract"). This
-backend declares those keys missing until it loads them; the NWB series to
-read are `motion_energy/{Body,Left,Right}CameraMotionEnergy`,
-`pupil/{Left,Right}PupilDiameter` (raw, not `...Smoothed`) and
-`pose_estimation/{Body,Left,Right}Camera/*`.
+The contract now has one key per camera (see "The `Session` contract"), and
+this backend loads all of them.
 
 **Consequences:** Loading this session takes about 6 s, including full
 contract validation. The tests needing the real file are skipped in CI (the
