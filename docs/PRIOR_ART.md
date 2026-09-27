@@ -215,11 +215,28 @@ spikes) in ~14 s transferring ~22 MB, with the ~130 MB spike read deferred.
   unit-identity-free tokenization. Already solves "neuron 1 ≠ neuron 1".
 - **NDT2** (Ye et al.) — multi-session masked modelling for spikes; session/subject
   context embeddings.
-- **SpikeProphecy** (arXiv 2605.12992) **[A]** — a large-scale benchmark for
-  autoregressive neural population *forecasting*, evaluated on Steinmetz 2019
-  (39 sessions, 10 mice) and IBL repeated site (66 sessions, up to 1,998
-  simultaneous neurons), with 50 ms-binned tensors released. **Audit this before
-  you write a line of forecasting code** — it likely covers your §3C.
+- **SpikeProphecy** (arXiv 2605.12992, NeurIPS 2026 D&B track;
+  `github.com/JohnMinnick/SpikeProphecy-...`, cloned to `external/SpikeProphecy`)
+  **[V] — audited, does NOT cover our §3C.** It forecasts **future neural
+  population activity itself** (autoregressive spike-count prediction, 50 ms
+  bins), not future *behaviour*. 105 sessions (39 Steinmetz + 66 IBL repeated
+  site, ~89,800 neurons), seven architecture baselines (Mamba, HGRN2,
+  GatedDeltaNet, LRU, Transformer, LSTM, RSynaptic SNN), evaluated with a
+  population-metric decomposition (temporal fidelity, spatial pattern accuracy,
+  magnitude-invariant alignment) — no behaviour-forecasting metric anywhere.
+  The only behaviour-decoding code (`src/data/ibl_behavior_loader.py`,
+  `src/distill/multi_head_loss.py`) is a **same-timestep** auxiliary
+  stimulus/choice classification head used to regularize the Appendix C
+  SNN-distillation experiment, trial-masked to active trials — it decodes the
+  present, not t+100/250/500 ms, and is not evaluated against an
+  autocorrelation-of-behaviour baseline.
+  **Roadmap implication:** ROADMAP.md Phase 9 is conditional on this audit
+  ("if SpikeProphecy already covers this, reduce to a small controlled
+  experiment... cut §3C to a stretch goal"). It does not cover it.
+  **Phase 9 should stay at its original 30–60 h scope, not be cut.**
+  Incidental find worth reusing: `tests/test_data/test_*leakage*.py` includes a
+  "PopGLM-as-leakage-catch" test — a concrete pattern for R1/R2-style leakage
+  tests worth looking at when writing `splits/guards.py` in Phase 2.
 - **Conformal prediction** is mature and model-agnostic, with split-CP requiring
   only a held-out calibration set. It has been applied to neural decoding
   (e.g. ConformalHDC) and to brain-to-text, where CTC-trained decoders were shown
@@ -256,7 +273,12 @@ spikes) in ~14 s transferring ~22 MB, with the ~130 MB spike read deferred.
 - Multi-task shared backbone with multiple heads — NEDS.
 - Multi-scale temporal binning — standard.
 - Cross-animal pretraining and fine-tuning — NEDS, with held-out animals.
-- Neural population forecasting — benchmarked (audit SpikeProphecy).
+- Neural population forecasting (predicting future *spikes* from past spikes)
+  — benchmarked, SpikeProphecy. Note this is a different task from Phase 9's
+  behaviour forecasting, which SpikeProphecy does not benchmark (see §E) — so
+  Phase 9 behaviour-at-a-future-horizon decoding, evaluated against an
+  autocorrelation-of-behaviour baseline, remains open, not "already done
+  elsewhere."
 - Conformal prediction, temperature scaling, deep ensembles, MC dropout — all
   off-the-shelf.
 - Agent-assisted scientific interpretation of spike data — SpikeLab, ibl-ai-agent.
