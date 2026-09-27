@@ -6,6 +6,62 @@ first.
 
 ---
 
+### 2026-09-27 — The `Session` contract (Phase 1, `neurodecoder/data/session.py`)
+
+**Decision:** Every backend returns a `Session` that validates itself on
+construction, so an invalid one can't exist:
+- **Canonical names are IBL's ALF names**, as used by the compressed BWM
+  (`stimOn_times`, `goCue_times`, `firstMovement_times`, `response_times`,
+  `feedback_times`, `intervals_0/1`, `choice`, `feedbackType`,
+  `contrastLeft/Right`, `probabilityLeft`, plus `stimOff_times`; units:
+  `probe_name`, `acronym`, `x/y/z`, `depths`, `label`, `firing_rate`). Other
+  backends (NWB, whose names differ, see `docs/PRIOR_ART.md` §D) map *to* these.
+- **Every canonical field must be declared present or missing with a
+  reason.** Present means it exists in the data and isn't entirely NaN;
+  missing means it's absent (no placeholder column). Unknown field names are
+  rejected, which catches typos. This is §7's "missing means missing",
+  enforced in code.
+- **Times are seconds on the session clock.** Spike times and behaviour
+  timestamps must be finite and sorted, and all spike, trial and behaviour
+  times must fall within `time_bounds`. A span over 24 h is rejected as
+  "probably milliseconds", the trap SpikeLab's loader sets.
+- Extra backend-specific columns (e.g. `cluster_uuid`) are allowed.
+- **Behaviour signals from video have one key per camera** (revised
+  2026-09-27): `motion_energy_left/right/body`, `pupil_left/right`,
+  `pose_left/right/body`, plus `wheel` and `lick`. IBL films each session with
+  three cameras at different rates (body ~30 Hz, left ~60 Hz, right ~150 Hz
+  in session `d23a44ef`), with different timestamps, so a single
+  `motion_energy` series can't hold them. The body camera doesn't see the
+  pupil, so there's no `pupil_body`. The original single-key names
+  (`motion_energy`, `pose`, `pupil`) are now rejected as unknown.
+- **Multi-channel series must name their columns.** A `TimeSeries` with
+  `(n_samples, n_channels)` data needs `channel_names` (one unique name per
+  column), and 1-D data takes none. Per-camera pose is several tracked
+  keypoints, each with x and y, and an unlabelled `(n, 10)` array would leave
+  "which column is the left paw's y?" to guesswork.
+
+**Why:** Phase 1's cross-backend tests are only meaningful if all backends
+produce the same shape of object with the same field names, and if a missing
+field can't masquerade as data.
+
+**Alternatives considered:** Validating in a separate function that callers
+could forget to run; NWB's column names as canonical (rejected: BWM is the
+primary training source).
+
+**Consequences:** The roadmap's interface says `Session.available:
+CapabilitySet`; the class is named `Capabilities`, with the same role. What a
+unit ID is (`cluster_uuid` vs `(pid, cluster_id)`) is left to each backend.
+BWM and NWB were later shown to share `(probe_name, cluster_id)` exactly (see
+`docs/PRIOR_ART.md` §D).
+
+**Correction (2026-09-27):** an earlier version of this entry said BWM stores
+trial times as float32 and so needs a ~1 ms comparison tolerance. That came
+from ibl-ai-agent's schema docs. The extracted `bwm_ephys` 1.2.1
+`metadata/trials.parquet` stores them as **double (float64)**, so trial times
+can be compared exactly. BWM's per-unit `firing_rate` *is* single precision
+(differs from NWB by at most 3.45e-6 on `d23a44ef`), so compare that one with
+a tolerance.
+
 ### 2026-09-27 — NWB intake reads with `pynwb` directly; SpikeLab is not a dependency
 
 **Decision:** `neurodecoder/nwb/` and the NWB data backend read files with
