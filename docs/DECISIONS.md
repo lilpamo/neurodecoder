@@ -6,6 +6,63 @@ first.
 
 ---
 
+### 2026-09-28 — ONE backend (`neurodecoder/data/backends/one_backend.py`), and three-way agreement
+
+**Decision:** `load_session_one(eid, one)` reads a session from IBL's public
+Alyx through ONE, and `load_session(eid, "one")` registers it. **Revisions are
+pinned** and both are part of the cache key:
+
+| Pin | Value | Why |
+|---|---|---|
+| `SORTER_REVISION` | `2024-05-06` | the sorting NWB and the compressed BWM both use |
+| `TRIALS_REVISION` | `2025-03-03` | the only trials revision on Alyx for these sessions, and the one NWB matches |
+
+This is the direct answer to the Phase 0 finding that **ONE serves the newest
+revision by default**, which is how NEDS's motion-energy inputs came from files
+postdating its paper (`docs/PRIOR_ART.md` §C). Every `load_object` call here
+passes an explicit revision; changing a pin is a deliberate edit that
+invalidates cached sessions.
+
+- **No new dependency.** It uses ONE-api only (already in the Fixed stack),
+  not `ibllib`/`brainbox`. Phase 0 showed `ibllib`'s API drifts, and the
+  high-level loaders aren't needed for this.
+- **All units, not just good ones.** `units.label` carries IBL's QC label
+  (1.0 = good), and callers filter. Extra columns: `cluster_id`,
+  `cluster_uuid` (matching NWB's), `atlas_id` and `peak_channel`.
+- **`units.x/y/z` are metres relative to bregma**, from each cluster's peak
+  channel in `channels.mlapdv` (µm), the same convention as BWM. So ONE and
+  BWM share a coordinate frame, while NWB's are Allen CCF µm.
+- **`units.acronym` is declared missing:** ONE gives Allen CCF ids (kept as
+  `atlas_id`), and mapping ids to acronyms needs `iblatlas`.
+- **`spikes.clusters` indexes the cluster table, it is not `cluster_id`.**
+  Getting that wrong would silently mis-assign every spike, so the backend
+  range-checks the index and raises.
+- **Behaviour:** the raw wheel only. A session with no wheel is declared
+  missing rather than raising. Pose, pupil and motion energy aren't loaded
+  yet.
+- **`make_one(cache_dir)`** builds the client, caching downloads under
+  `one_cache` from `configs/data.yaml` (`~/data/neurodecoder/one`).
+
+**Three-way agreement on `d23a44ef`, now tested in code:**
+- **ONE vs NWB: exact.** All 1,961 units, all 61,981,600 spike times
+  element-for-element, all 13 trial fields, every `cluster_uuid` and `label`,
+  the `depths`, and the 755,552-sample wheel. Both derive from the same
+  sorting run, so exact equality is the right bar, and the NWB conversion
+  preserves the data.
+- **BWM vs NWB:** same good units and spike counts, spike times within 50 µs
+  (BWM stores 100 µs ticks), all trial fields identical except
+  `firstMovement_times` (see "BWM compressed backend").
+
+This satisfies ROADMAP Phase 1's "three backends return byte-identical unit
+counts and spike-count totals for the same eid", with the two documented,
+explained discrepancies rather than a silent averaging over them.
+
+**Cost:** about 60 s for this session from a warm ONE cache; the session's
+files are about 1.6 GB, dominated by `spikes.times`/`spikes.clusters` for
+both probes. The cache for the real tests was populated by copying the files
+the Phase 0 NEDS run had already downloaded, rather than fetching them again.
+Those tests skip when that cache is absent.
+
 ### 2026-09-28 — Phase 1 success check (`neurodecoder/cli/phase1_check.py`): passed
 
 **Decision:** ROADMAP Phase 1's success criterion ("`load_session` works for
@@ -135,8 +192,9 @@ together with the eid form the cache key.
   version's asset (downloads are SHA-256 checked, and the streamed load is
   tested equal to the local one). Two local copies for one eid raise instead
   of one being picked.
-- **Not registered yet:** `"one"` (ROADMAP's ONE backend). Asking for it
-  raises, listing the available backends.
+- **`"one"` was added later** (see "ONE backend"), with its pinned sorting and
+  trials revisions in the cache key. An unregistered name raises, listing the
+  available backends.
 - `use_cache=False` bypasses the cache completely: no read, no write.
 
 **Verified:**

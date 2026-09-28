@@ -35,6 +35,7 @@ def _config(tmp_path: Path, data_root: Path | None = None) -> DataConfig:
         bwm_ephys_root=root / "bwm_compressed/bwm_ephys/1.2.1",
         bwm_behavior_root=root / "bwm_compressed/bwm_behavior/2.0.0",
         nwb_dir=root / "dandi/000409",
+        one_cache_root=root / "one",
         cache_root=tmp_path / "cache",
     )
 
@@ -62,6 +63,7 @@ def test_default_config_resolves_paths_under_the_data_root(monkeypatch):
     assert cfg.data_root == Path("~/data/neurodecoder").expanduser()
     assert cfg.bwm_ephys_root == cfg.data_root / "bwm_compressed/bwm_ephys/1.2.1"
     assert cfg.bwm_behavior_root == cfg.data_root / "bwm_compressed/bwm_behavior/2.0.0"
+    assert cfg.one_cache_root == cfg.data_root / "one"
     assert cfg.nwb_dir == cfg.data_root / "dandi/000409"
     assert cfg.cache_root == cfg.data_root / "cache"
 
@@ -81,8 +83,8 @@ def test_config_rejects_unknown_keys(tmp_path):
 
 
 def test_unknown_backend_lists_the_available_ones(tmp_path):
-    with pytest.raises(ValueError, match="bwm.*nwb"):
-        load_session(EID, "one", config=_config(tmp_path))
+    with pytest.raises(ValueError, match="bwm.*nwb.*one"):
+        load_session(EID, "spikeglx", config=_config(tmp_path))
 
 
 def test_key_parts_pin_source_and_loader_versions():
@@ -94,6 +96,9 @@ def test_key_parts_pin_source_and_loader_versions():
     }
     assert key_parts(EID, "nwb")["source"] == {"dandiset": "000409", "version": "0.260309.1324"}
     assert key_parts(EID, "nwb")["loader_version"] == dandi_nwb.LOADER_VERSION
+    one_source = key_parts(EID, "one")["source"]
+    assert one_source["sorter_revision"] == "2024-05-06"
+    assert one_source["trials_revision"] == "2025-03-03"
 
 
 def test_second_call_is_served_from_the_cache(monkeypatch, tmp_path):
