@@ -12,13 +12,14 @@ from neurodecoder.data.cache import SessionCache
 from neurodecoder.data.session import Session
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "data.yaml"
-_CONFIG_KEYS = {"data_root", "bwm_ephys", "nwb_000409", "cache"}
+_CONFIG_KEYS = {"data_root", "bwm_ephys", "bwm_behavior", "nwb_000409", "cache"}
 
 
 @dataclass(frozen=True)
 class DataConfig:
     data_root: Path
     bwm_ephys_root: Path
+    bwm_behavior_root: Path
     nwb_dir: Path
     cache_root: Path
 
@@ -33,6 +34,7 @@ def load_data_config(path: str | os.PathLike = DEFAULT_CONFIG) -> DataConfig:
     return DataConfig(
         data_root=root,
         bwm_ephys_root=root / raw["bwm_ephys"],
+        bwm_behavior_root=root / raw["bwm_behavior"],
         nwb_dir=root / raw["nwb_000409"],
         cache_root=root / raw["cache"],
     )

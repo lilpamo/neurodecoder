@@ -33,6 +33,7 @@ def _config(tmp_path: Path, data_root: Path | None = None) -> DataConfig:
     return DataConfig(
         data_root=root,
         bwm_ephys_root=root / "bwm_compressed/bwm_ephys/1.2.1",
+        bwm_behavior_root=root / "bwm_compressed/bwm_behavior/2.0.0",
         nwb_dir=root / "dandi/000409",
         cache_root=tmp_path / "cache",
     )
@@ -60,6 +61,7 @@ def test_default_config_resolves_paths_under_the_data_root(monkeypatch):
     cfg = load_data_config()
     assert cfg.data_root == Path("~/data/neurodecoder").expanduser()
     assert cfg.bwm_ephys_root == cfg.data_root / "bwm_compressed/bwm_ephys/1.2.1"
+    assert cfg.bwm_behavior_root == cfg.data_root / "bwm_compressed/bwm_behavior/2.0.0"
     assert cfg.nwb_dir == cfg.data_root / "dandi/000409"
     assert cfg.cache_root == cfg.data_root / "cache"
 
