@@ -6,6 +6,58 @@ first.
 
 ---
 
+### 2026-09-28 — The evaluation contract (`neurodecoder/evaluation/contract.py`)
+
+**Decision (the user chose each option below before any code):**
+`evaluate(task, *, model, baseline_ridge, baseline_rrr, trialstruct, ceiling,
+seed)` is the only entry point that scores a model. Every row is a required
+argument, and it always fits and scores all six rows in CLAUDE.md §5 order.
+
+| Row | What is fitted |
+|---|---|
+| `null_shuffle` | **the model under test**, refit once per shift draw on targets shifted within each session (`evaluation.nulls`); per-session median over draws |
+| `null_trialstruct` | the trial-structure decoder, given each session's data **with spikes and units removed** (`z = None`) |
+| `baseline_ridge`, `baseline_rrr` | the baselines, same split |
+| `model` | the model under test |
+| `ceiling_within` | the model on a within-session split of exactly the test sessions; for a within-session task it *is* the model row, and the report says so |
+
+- **Fits receive the train partition only**, loaded one session at a time
+  (`SessionData`, via a `DataProvider`). Predictions are scored per test
+  session, and invalid predictions (wrong shape, NaN, a probability outside
+  [0, 1]) raise.
+- **The shuffle row re-trains the model under test**, so it measures what that
+  model extracts from target autocorrelation alone.
+  - It uses 20 draws by default. A costly model may use fewer, but never fewer
+    than 5.
+  - A session's k-th draw is the same shift for its train and test data, so a
+    within-session model sees one consistent rotation.
+  - Draws are seeded per session from the run seed.
+  - A session without a valid shift sits the null out: it isn't used for
+    training that draw, and its shuffle metric is NaN.
+- **Verdicts:** for each of `null_trialstruct`, `null_shuffle` and
+  `baseline_ridge`:
+  - the test is a one-sided Wilcoxon signed-rank test over test sessions on the
+    per-session difference in the primary metric, at α = 0.05. The line also
+    gives the median difference and the win count;
+  - "beats" needs p < 0.05 **and** a positive median difference;
+  - fewer than 5 sessions can never reach α (p ≥ 2⁻ⁿ), so they never count as
+    beating, and the line says why.
+
+  A failure prints CLAUDE.md §5's consequence plainly: "this is not decoding",
+  "no signal beyond the target's own autocorrelation", or "a more complex model
+  is not justified".
+- **Primary metric: AUROC for classification** (threshold-free, robust to
+  choice's 26/74 imbalance) and R² for regression. Balanced accuracy is still
+  reported, and the NEDS comparison uses it.
+- **Per-bin targets are scored on every task-period bin** with a defined target
+  and a full window in its span, the same span the shuffle rotates in.
+- **The split guard runs first,** on the task's split and the ceiling's, at the
+  task's context length.
+
+**Still to come:** the real `DataProvider` (sessions → normalised counts,
+windows, targets, null features) and the baselines. Until then the contract is
+tested on synthetic sessions with stub decoders.
+
 ### 2026-09-28 — Null inputs (`neurodecoder/evaluation/nulls.py`, `configs/nulls.yaml`)
 
 **Decision (the user chose each option below before any code):** the module
