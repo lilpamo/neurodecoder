@@ -6,6 +6,61 @@ first.
 
 ---
 
+### 2026-09-28 — Null inputs (`neurodecoder/evaluation/nulls.py`, `configs/nulls.yaml`)
+
+**Decision (the user chose each option below before any code):** the module
+builds the inputs for the contract's two null rows; the baseline models fit
+them. Nothing was fitted or scored to make these choices.
+
+**`null_shuffle`:** the target is circularly shifted within its session, which
+breaks the neural-behaviour alignment and keeps the target's autocorrelation.
+- **20 shifts per session**, drawn with an explicit seed, distinct and uniform
+  over [minimum, length − minimum].
+- **Per-bin targets rotate within the task period** and are undefined (NaN)
+  outside it. The minimum shift is **30 s**, about 20× the slowest
+  decorrelation measured on three sessions. Autocorrelation falls below 0.1
+  after:
+  - 0.4–0.5 s for wheel velocity;
+  - about 1 s for |velocity|;
+  - 1.2–1.3 s for movement state, in two of the sessions. The third never
+    dropped below 0.1 within 100 s, which is slow drift a circular shift keeps.
+- **Trial-level labels rotate over the target's trials,** and each trial's
+  window stays at its own time. The minimum shift is **100 trials**:
+  - that is longer than any biased block (21–99 trials, median 47) and the
+    90-trial opening block;
+  - sessions with fewer than 200 usable trials (about 5%) get no shuffle null,
+    reported as missing.
+
+**`null_trialstruct`:** features from task variables only, never spikes.
+- **Per-bin targets:**
+  - one-hot time since each trial start, stimulus onset and go cue, in 0.1 s
+    steps to 3 s, then one "later" feature (95 features in total);
+  - the current trial's signed contrast and block prior.
+
+  Behaviour-timed events (first movement, response, feedback) and the choice
+  are never read, so beating this null means spikes add more than task timing.
+- **Choice:** the current signed contrast and block prior, plus the previous 10
+  trials' stimulus side, choice and reward.
+- **Block:** the previous 10 trials' side, choice and reward only.
+  - The block window ends before stimulus onset, so this null gets neither the
+    current stimulus nor the label. The history is what reveals the block (80/20
+    stimulus sides).
+  - Stimulus side is taken from which contrast column is set, so a 0% trial
+    still has a side, which follows the block prior like any other trial.
+- **Movement onset** has no null yet; asking for one raises.
+
+**Tests:**
+- the features don't depend on spike counts, and don't change when
+  behaviour-timed columns are permuted;
+- history uses only earlier trials;
+- the block null never sees its trial's own block, stimulus, choice or reward;
+- shifts keep autocorrelation (lags 1–25) while decorrelating from the original.
+
+**Smoke run on `d23a44ef`:** per-bin features are 183,447 × 95 (70 MB,
+0.11 s). Every target gets 20 valid shifts: 115,658 task-period bins for the
+per-bin targets, 290 trials for choice and 224 for block (block's valid shifts
+are 100–124).
+
 ### 2026-09-28 — Decoding metrics (`neurodecoder/evaluation/metrics.py`, `configs/evaluation.yaml`)
 
 **Decision:** metrics are computed **per session**, and summarised only as a
