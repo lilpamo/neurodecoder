@@ -61,7 +61,9 @@ def nwb_source(eid: str, config: DataConfig) -> Path | str:
 
 
 def _load_bwm(eid: str, config: DataConfig) -> Session:
-    return bwm_compressed.load_session_bwm(eid, config.bwm_ephys_root)
+    return bwm_compressed.load_session_bwm(
+        eid, config.bwm_ephys_root, behaviour_root=config.bwm_behavior_root
+    )
 
 
 def _load_nwb(eid: str, config: DataConfig) -> Session:
@@ -76,7 +78,11 @@ def _load_one(eid: str, config: DataConfig) -> Session:
 
 BACKENDS = {
     "bwm": Backend(
-        source={"dataset": bwm_compressed.DATASET_NAME, "version": bwm_compressed.DATASET_VERSION},
+        source={
+            "dataset": bwm_compressed.DATASET_NAME,
+            "version": bwm_compressed.DATASET_VERSION,
+            "behaviour_version": bwm_compressed.BEHAVIOUR_DATASET_VERSION,
+        },
         loader_version=bwm_compressed.LOADER_VERSION,
         load=_load_bwm,
     ),
