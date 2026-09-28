@@ -36,6 +36,8 @@ DANDI_API = "https://api.dandiarchive.org/api"
 DANDISET = "000409"
 # A published, immutable version: the draft can change under us, like ONE revisions.
 DANDISET_VERSION = "0.260309.1324"
+# Bump when this module's mapping into a Session changes; it invalidates cached sessions.
+LOADER_VERSION = 1
 
 _TRIAL_TIMES = {
     "intervals_0": "start_time",
