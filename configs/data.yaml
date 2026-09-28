@@ -1,0 +1,6 @@
+# Where the data lives. Paths are relative to data_root, which the
+# NEURODECODER_DATA_ROOT environment variable overrides.
+data_root: ~/data/neurodecoder
+bwm_ephys: bwm_compressed/bwm_ephys/1.2.1
+nwb_000409: dandi/000409
+cache: cache

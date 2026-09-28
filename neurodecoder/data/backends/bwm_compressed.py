@@ -26,6 +26,8 @@ from neurodecoder.data.session import (
 DATASET_NAME = "bwm_ephys"
 # Pinned: a new release can change counts or encodings, like ONE and DANDI revisions.
 DATASET_VERSION = "1.2.1"
+# Bump when this module's mapping into a Session changes; it invalidates cached sessions.
+LOADER_VERSION = 1
 
 _SHARD_FORMAT = {
     "format": "ibl_agent_spike_shard_v2",

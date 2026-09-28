@@ -6,6 +6,45 @@ first.
 
 ---
 
+### 2026-09-28 — `load_session` entry point and `configs/data.yaml`
+
+**Decision:** `load_session(eid, backend="bwm", *, config=None,
+use_cache=True)` in `neurodecoder/data/load.py` is the single way to get a
+session, as the ROADMAP Phase 1 interface describes. Each backend is
+registered with its data **source** identity and **loader version**, which
+together with the eid form the cache key.
+
+| Name | Reads | `source` in the cache key |
+|---|---|---|
+| `"bwm"` (default) | `bwm_compressed.load_session_bwm` | `{"dataset": "bwm_ephys", "version": "1.2.1"}` |
+| `"nwb"` | `dandi_nwb.load_session_nwb`, from a local copy if one exists, else streamed | `{"dandiset": "000409", "version": "0.260309.1324"}` |
+
+- **Paths come from `configs/data.yaml`** (the first file in `configs/`, per
+  §7): a `data_root` plus subpaths for the BWM release, the local 000409
+  copies and the cache. `NEURODECODER_DATA_ROOT` overrides `data_root`.
+  Unknown or missing keys raise, so a typo can't be silently ignored.
+- **`LOADER_VERSION = 1`** now sits in each backend module, next to its
+  pinned data version. Bump it whenever that backend's mapping into a
+  `Session` changes. It's part of the cache key, so the bump invalidates
+  that backend's cached sessions, as R6 does for `PREPROC_VERSION`. It lives
+  in the backend, not in the registry, so the person changing a mapping sees
+  it.
+- **Local and streamed NWB share one cache key.** A local copy is the pinned
+  version's asset (downloads are SHA-256 checked, and the streamed load is
+  tested equal to the local one). Two local copies for one eid raise instead
+  of one being picked.
+- **Not registered yet:** `"one"` (ROADMAP's ONE backend). Asking for it
+  raises, listing the available backends.
+- `use_cache=False` bypasses the cache completely: no read, no write.
+
+**Verified:**
+- `load_session` returns sessions identical to the direct backend calls for
+  BWM and NWB on `d23a44ef`, and the second BWM call is served from the cache
+  without calling the backend.
+- Config parsing, the env override and key rejection are tested.
+- The NWB file resolution is tested: local copy first, streaming otherwise,
+  and ambiguous local copies rejected.
+
 ### 2026-09-28 — Session cache (`neurodecoder/data/cache.py`)
 
 **Decision:** `SessionCache(root)` stores loaded `Session`s on disk, one
