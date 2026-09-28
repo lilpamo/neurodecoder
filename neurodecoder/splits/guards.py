@@ -8,7 +8,10 @@ It raises and never warns. It checks (docs/SPLITS_AND_LEAKAGE.md, "The guard API
 - within a session, the blocks share no bin and are at least max(context, 2 s) apart;
 - every listed trial is in one partition only and lies wholly inside its block;
 - for a held-out region, by the split's recorded unit counts, test sessions have at
-  least 20% of their units in the region and train sessions none that is or could be.
+  least 20% of their units in the region and train sessions none that is or could be;
+- for a held-out configuration, the recorded cutoffs are each lab's percentiles of
+  the recorded per-session unit counts, and each session is on the right side of its
+  lab's cutoffs.
 """
 
 import math
@@ -21,6 +24,7 @@ from neurodecoder.splits.registry import (
     KINDS,
     MIN_GAP_S,
     MIN_REGION_FRACTION,
+    config_cutoffs,
     PARTITIONS,
     Split,
     bin_range,
@@ -57,6 +61,8 @@ def assert_split_valid(
             raise ValueError(f"session {shared[0]} is in both {a} and {b}")
     if split.kind == "held_out_region":
         _check_region(split)
+    if split.kind == "held_out_config":
+        _check_config(split)
     key = _GROUP_KEYS.get(split.kind)
     if key is None:
         return
@@ -84,6 +90,34 @@ def _check_region(split: Split) -> None:
             raise ValueError(
                 f"train session {eid} has {s['n_in_region']} units in {region} and "
                 f"{s['n_possibly_in_region']} possibly in it"
+            )
+
+
+def _check_config(split: Split) -> None:
+    """Recompute each lab's cutoffs from every session's recorded unit count, then check
+    each test session is below its lab's test cutoff and each train session at or above
+    its lab's train cutoff.
+    """
+    recomputed = config_cutoffs(split.sessions)
+    if recomputed != split.params["cutoffs"]:
+        raise ValueError(
+            "recorded cutoffs are not the within-lab percentiles of the recorded unit counts"
+        )
+    for eid in split.partitions["test"]:
+        s = split.sessions[eid]
+        cutoff = recomputed[s["lab"]]["test_below_units"]
+        if not s["n_units"] < cutoff:
+            raise ValueError(
+                f"test session {eid} has {s['n_units']} units, not under {s['lab']}'s "
+                f"cutoff {cutoff}"
+            )
+    for eid in split.partitions["train"]:
+        s = split.sessions[eid]
+        cutoff = recomputed[s["lab"]]["train_from_units"]
+        if not s["n_units"] >= cutoff:
+            raise ValueError(
+                f"train session {eid} has {s['n_units']} units, under {s['lab']}'s "
+                f"cutoff {cutoff}"
             )
 
 

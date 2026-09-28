@@ -6,6 +6,63 @@ first.
 
 ---
 
+### 2026-09-28 — Held-out configuration split, with within-lab percentiles (`neurodecoder/splits/registry.py`)
+
+**Decision (definition from the user):** a session's configuration is its count
+of QC-passing units under the task-period rule. `held_out_config(manifest,
+units, preproc)` works from `release_units` without loading sessions:
+- **Test:** sessions below the 10th percentile **of their own lab's** sessions.
+- **Train:** sessions at or above their lab's 25th percentile.
+- **Dropped:** sessions in between.
+
+Animals may be shared between train and test, as for `held_out_region`. The
+split records each lab's cutoffs: its percentiles, the same cutoffs as whole
+unit counts, and its session count. It also records every session's count and
+lab. The guard recomputes every lab's cutoffs from those records, and checks
+each session against its own lab's.
+
+**Why within lab (option chosen by the user):** percentiles taken across the
+whole release gave 46 test sessions (≤ 46 units) and 344 train (≥ 90). But the
+test set was 30.4% hausserlab (13.5% of sessions) and 17.4% wittenlab (8.1%),
+so the two labs made up 48% of it. The cause is lab protocol, not yield:
+- 95% of hausserlab's sessions use one probe, so it has the lowest session
+  counts (median 91.5, against 128–234 elsewhere), yet its units per probe (83)
+  are typical;
+- 43 of those 46 test sessions were single-probe.
+
+So that split would have measured lab shift. Units per probe still left two
+labs at 37% of test. Within-lab percentiles bring every lab's test share to
+within 1.3 points of its share of the data.
+
+**On the full manifest** (459 sessions; built in 0.4 s; passes the guard):
+- **Sizes:** 50 test, 346 train, 63 dropped.
+- **Test animals:** 40. 31 have one test session, 8 have two and 1 has three.
+  38 of the 50 test sessions come from animals with other sessions in train.
+- **Unit counts:** test median 32 (2–109), train median 165.5.
+- **Probes:** 90% of test sessions are single-probe, against 38% of train and
+  48% overall. The split still mostly holds out single-probe recordings, but
+  now within each lab, which is the configuration shift it's meant to measure.
+
+| Lab | Sessions | Test below (≤ units) | Train from (≥ units) | Test | Train | Test share | Share of all |
+|---|---|---|---|---|---|---|---|
+| angelakilab | 41 | 61.0 (60) | 90.0 (90) | 4 | 31 | 8.0% | 8.9% |
+| churchlandlab | 36 | 71.0 (70) | 112.0 (112) | 4 | 27 | 8.0% | 7.8% |
+| churchlandlab_ucla | 41 | 77.0 (76) | 122.0 (122) | 4 | 31 | 8.0% | 8.9% |
+| cortexlab | 42 | 88.1 (88) | 97.0 (97) | 5 | 32 | 10.0% | 9.2% |
+| danlab | 46 | 63.0 (62) | 90.0 (90) | 5 | 34 | 10.0% | 10.0% |
+| hausserlab | 62 | 32.4 (32) | 55.75 (56) | 7 | 46 | 14.0% | 13.5% |
+| hoferlab | 17 | 46.6 (46) | 90.0 (90) | 2 | 13 | 4.0% | 3.7% |
+| mainenlab | 44 | 65.4 (65) | 122.75 (123) | 5 | 33 | 10.0% | 9.6% |
+| mrsicflogellab | 25 | 44.8 (44) | 73.0 (73) | 3 | 20 | 6.0% | 5.4% |
+| steinmetzlab | 31 | 17.0 (16) | 70.0 (70) | 3 | 23 | 6.0% | 6.8% |
+| wittenlab | 37 | 31.4 (31) | 79.0 (79) | 4 | 28 | 8.0% | 8.1% |
+| zadorlab | 37 | 110.2 (110) | 134.0 (134) | 4 | 28 | 8.0% | 8.1% |
+
+**Consequence:** "few units" is relative to the lab. A zadorlab test session
+(≤ 110 units) can hold more units than a hausserlab training session (≥ 56).
+The split measures low yield for the lab's protocol, not an absolute unit
+count.
+
 ### 2026-09-28 — Unit QC uses the task-period firing rate (`PREPROC_VERSION` 2)
 
 **Decision (signed off by the user on the evidence below):** unit QC's 0.1 Hz
