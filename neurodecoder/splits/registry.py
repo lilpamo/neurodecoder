@@ -15,7 +15,8 @@ Kinds (docs/SPLITS_AND_LEAKAGE.md):
 - held_out_region: sessions with >= 20% of their QC-passing units in Beryl region R
   are test; sessions with no QC-passing unit that is or could be in R are train; the
   rest are dropped.
-held_out_config is not built yet.
+- held_out_config: sessions with fewer QC-passing units than their lab's 10th
+  percentile are test; sessions at or above their lab's 25th percentile are train.
 
 Random choices use numpy's default_rng with the required seed. The saved file, not
 the seed, is the record: a different numpy could draw differently from the same seed.
@@ -40,13 +41,51 @@ from neurodecoder.qc.units import unit_qc
 SPLIT_FORMAT_VERSION = 1
 PARTITIONS = ("train", "calibration", "test")
 GROUP_KINDS = {"subject": "held_out_animal", "lab": "held_out_lab"}
-KINDS = (*GROUP_KINDS.values(), "held_out_session", "within_session", "held_out_region")
+KINDS = (
+    *GROUP_KINDS.values(),
+    "held_out_session",
+    "within_session",
+    "held_out_region",
+    "held_out_config",
+)
 # Behavioural autocorrelation outlives the neural context, so temporal splits keep at
 # least this much time between train and test whatever the context.
 MIN_GAP_S = 2.0
 # docs/SPLITS_AND_LEAKAGE.md: a held-out-region test session has at least this
 # fraction of its QC-passing units in the region.
 MIN_REGION_FRACTION = 0.2
+# The user's definition of a non-standard configuration (2026-09-28): a session is
+# held-out-config test when its QC-passing unit count is below the 10th percentile of
+# its lab's sessions, and train when at or above its lab's 25th. Percentiles are
+# within lab because across the release the bottom 10% is mostly single-probe labs,
+# which would make the split measure lab shift. numpy's default (linear) percentiles.
+CONFIG_TEST_PERCENTILE = 10
+CONFIG_TRAIN_PERCENTILE = 25
+
+
+def config_cutoffs(sessions: Mapping[str, dict]) -> dict:
+    """lab -> its cutoffs, from eid -> {"lab", "n_units"}.
+
+    Each lab gets test_below_units and train_from_units (its percentiles), the same
+    cutoffs as whole unit counts (test_max_units, train_min_units), and n_sessions.
+    """
+    by_lab: dict[str, list[int]] = {}
+    for record in sessions.values():
+        by_lab.setdefault(record["lab"], []).append(record["n_units"])
+    cutoffs = {}
+    for lab, counts in sorted(by_lab.items()):
+        test_below, train_from = np.percentile(
+            np.asarray(counts, dtype=np.float64),
+            [CONFIG_TEST_PERCENTILE, CONFIG_TRAIN_PERCENTILE],
+        )
+        cutoffs[lab] = {
+            "n_sessions": len(counts),
+            "test_below_units": float(test_below),
+            "train_from_units": float(train_from),
+            "test_max_units": math.ceil(test_below) - 1,
+            "train_min_units": math.ceil(train_from),
+        }
+    return cutoffs
 
 
 @dataclass(frozen=True)
@@ -312,6 +351,45 @@ def held_out_region(
         "atlas": f"iblatlas {atlas_version}",
     }
     return _split("held_out_region", params, partitions, sessions, manifest, preproc)
+
+
+def held_out_config(manifest: Manifest, units: pd.DataFrame, preproc: PreprocConfig) -> Split:
+    """Hold out sessions with unusually few QC-passing units for their lab.
+
+    units: every unit of every manifest session, with eid, label, acronym and
+    task_firing_rate (qc.task_rates.release_units). Test sessions have fewer
+    QC-passing units than the CONFIG_TEST_PERCENTILE-th percentile of their lab's
+    sessions; train sessions have at least their lab's CONFIG_TRAIN_PERCENTILE-th; the
+    rest are dropped. Every session's count and every lab's cutoffs are recorded, so
+    the guard can recompute them.
+    """
+    meta = _session_meta(manifest)
+    covered = set(units["eid"])
+    missing, unknown = sorted(set(meta) - covered), sorted(covered - set(meta))
+    if missing or unknown:
+        raise ValueError(f"units table lacks sessions {missing[:3]}, has unknown {unknown[:3]}")
+    passing = units.loc[unit_qc(units, preproc.qc)["passed"].to_numpy(), "eid"]
+    counts = passing.value_counts().reindex(sorted(meta), fill_value=0).astype(np.int64)
+
+    sessions = {eid: {**meta[eid], "n_units": int(n)} for eid, n in counts.items()}
+    cutoffs = config_cutoffs(sessions)
+    partitions: dict[str, list[str]] = {"train": [], "test": []}
+    for eid, record in sessions.items():
+        lab = cutoffs[record["lab"]]
+        if record["n_units"] < lab["test_below_units"]:
+            partitions["test"].append(eid)
+        elif record["n_units"] >= lab["train_from_units"]:
+            partitions["train"].append(eid)
+    if not partitions["test"] or not partitions["train"]:
+        raise ValueError("the within-lab cutoffs leave an empty partition")
+    params = {
+        "test_percentile": CONFIG_TEST_PERCENTILE,
+        "train_percentile": CONFIG_TRAIN_PERCENTILE,
+        "percentile_method": "linear",
+        "percentiles_within": "lab",
+        "cutoffs": cutoffs,
+    }
+    return _split("held_out_config", params, partitions, sessions, manifest, preproc)
 
 
 def save_split(split: Split, path: str | os.PathLike) -> Path:
