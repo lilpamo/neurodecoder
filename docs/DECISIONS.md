@@ -6,6 +6,73 @@ first.
 
 ---
 
+### 2026-09-28 — Targets (`neurodecoder/targets/`, `configs/targets.yaml`)
+
+**Decision (the user chose each option below before any code):** five targets,
+all built from the BWM release that the manifest and splits already use. The
+release's wheel is within 0.52 mrad of raw, and its `firstMovement_times` is
+within 1.7 ms of ONE's 2025-03-03 revision (see "BWM compressed backend").
+
+| Target | Kind | Definition |
+|---|---|---|
+| `wheel_velocity` | per bin, rad/s | (position at bin end − position at bin start) / bin width; positions linearly interpolated at bin edges, never extrapolated (NaN outside the wheel's samples) |
+| `movement_state` | per bin, 1 / 0 / NaN | 1 if the bin lies wholly inside a wheel movement, 0 if wholly inside a quiescent period, NaN otherwise; epochs from IBL's detector as shipped in `bwm_behavior` 2.0.0 (ibllib 4.0.1 `extract_wheel_moves`, quiescence ≥ 0.2 s) |
+| `choice` | per trial, 1 / 0 | clockwise (`choice == +1`) / counter-clockwise (−1); window: the 100 ms before first movement |
+| `block` | per trial, 1 / 0 | left block (`probabilityLeft == 0.8`) / right (0.2); the unbiased 0.5 block has no label; window: 0.4 s to 0.1 s before stimulus onset |
+| `movement_onset` | per trial, event time | `firstMovement_times`, with the bin containing it; no window (how to score an event target is a Phase 3 choice) |
+
+- **Wheel filter: bin displacement.** The alternatives were:
+  - IBL/NEDS: interpolate to 1 kHz, 8th-order 20 Hz Butterworth run forwards and
+    backwards, differentiate, and sample at the bin end. Each value then mixes
+    in tens of ms of future movement, and IBL's filter settings come with it.
+  - Causal smoothing over the last N bins: adds a lag and a new tunable.
+
+  Bin displacement is the exact mean velocity over each spike bin, has nothing
+  to tune and uses no sample from after the bin. It differs from NEDS's target
+  (NEDS decodes |v| after the Butterworth filter), so the Phase 3 NEDS
+  comparison must rebuild NEDS's target to compare like with like.
+- **Trials: `bwm_include` only.** It is the BWM paper's rule (reaction time
+  0.08–2 s, a choice made, no missing key events). It matches that rule on
+  99.98% of the release's 295,920 trials (71 differ) and keeps 66.4%. NEDS's
+  looser rule (reaction time 0–10 s, trial ≤ 10 s) would keep 83.9%.
+- **Windows: the BWM paper's, in `configs/targets.yaml`.** The block window is
+  pre-stimulus, so activity carrying the upcoming choice (which correlates with
+  block) can't stand in for block. NEDS's window (0.5 s before to 1.5 s after
+  stimulus onset, for every target) is left for the Phase 3 comparison, as an
+  alternative config.
+  - **Exact bin arithmetic:** a window is a whole number of bins (block 15,
+    choice 5, at 20 ms). Its `end_bin` is the last bin that finishes by the
+    window's stop, so it never reaches past it. It may start up to one bin
+    before the window's start.
+  - **Handing off to windows:** `end_bin` goes to `preprocess.windows`
+    `extract` as `ends`, with `context_bins` from the target.
+- **Movement state: moving / quiescent from IBL's epochs.** In all 459
+  sessions, movements never overlap each other or a quiescent epoch, and
+  quiescent epochs are exactly the gaps of at least 0.2 s between movements
+  (plus the stretch before the first). A bin straddling an epoch edge is
+  unlabelled, which adds no threshold.
+- **Versioning:** `TARGETS_VERSION = 1`. `TargetConfig.fingerprint()` hashes it
+  with the windows, and every target records it alongside the preprocessing
+  fingerprint of the bins it sits on (R6).
+
+**Checked on `d23a44ef`** (no decoding metric computed):
+- **Wheel velocity** is defined in every one of the 183,447 bins. The smallest
+  non-zero |v| is 0.003 rad/s, because positions are interpolated at bin edges
+  3.1 ms off the wheel's 100 Hz samples.
+- **Movement state** over the task period: moving 35.0%, quiescent 63.6%,
+  unlabelled 1.4%.
+- **IBL's detector and our velocity agree.** They are independent
+  constructions from one wheel:
+  - mean |v| is 1.079 rad/s in moving bins and 0.018 in quiescent ones (61×);
+  - 99.3% of moving bins have non-zero velocity;
+  - 65.5% of quiescent bins have exactly zero; the rest hold sub-threshold
+    jitter that IBL's detector allows.
+- **Trial targets:** 410 trials, 290 `bwm_include`. That gives 290 choice
+  labels (26% clockwise), 224 block labels (46% left; the 66 unbiased-block
+  trials have none) and 290 onsets.
+- **Onsets agree with IBL's movement epochs:** 98.6% lie inside one (allowing
+  one bin before its start), a median 2.0 ms from the nearest movement start.
+
 ### 2026-09-28 — Held-out configuration split, with within-lab percentiles (`neurodecoder/splits/registry.py`)
 
 **Decision (definition from the user):** a session's configuration is its count
