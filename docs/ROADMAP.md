@@ -127,7 +127,7 @@ disjoint in animal-held-out splits. `test_normalization_fit_on_train_only` —
 mutating test data does not change stored statistics. `test_binning_determinism`
 — same input, same `PREPROC_VERSION`, byte-identical output.
 
-**Success criteria.** All five split types (§ SPLITS doc) generate and validate.
+**Success criteria.** All six split types (§ SPLITS doc) generate and validate.
 Round-trip a session to tensors and back to spike counts within float tolerance.
 
 **Failure points.** Wheel velocity is the classic one — differentiating a noisy
