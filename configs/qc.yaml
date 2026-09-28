@@ -7,4 +7,8 @@
 min_label: 1.0
 # Units located outside the brain or with no region assigned.
 exclude_regions: [void, root]
+# Applied to the task-period rate: spikes from the first trial's start to the last
+# trial's end, over that time (since PREPROC_VERSION 2, signed off 2026-09-28). The
+# release's whole-recording firing_rate includes pre- and post-task time, where some
+# units fire almost exclusively; it is kept as a reported column only.
 min_firing_rate_hz: 0.1

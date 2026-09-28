@@ -6,3 +6,5 @@ bwm_behavior: bwm_compressed/bwm_behavior/2.0.0
 nwb_000409: dandi/000409
 one_cache: one
 cache: cache
+# Tables computed once from a release, e.g. per-unit task-period firing rates.
+derived: derived

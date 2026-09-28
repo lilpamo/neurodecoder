@@ -263,8 +263,8 @@ def held_out_region(
 ) -> Split:
     """Hold out Beryl region `region`, by the stricter definition in the split doc.
 
-    units: every unit of every manifest session, with eid, label, acronym, firing_rate
-    and beryl_acronym (the BWM release's metadata/units.parquet). Only units passing
+    units: every unit of every manifest session, with eid, label, acronym,
+    task_firing_rate and beryl_acronym (qc.task_rates.release_units). Only units passing
     preproc.qc count. A unit is in the region when its beryl_acronym is the region, and
     possibly in it when it has no Beryl region and its Allen acronym contains or lies
     inside the region. Test sessions have >= MIN_REGION_FRACTION of their units in the

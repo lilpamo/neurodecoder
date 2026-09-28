@@ -22,7 +22,8 @@ from neurodecoder.data.session import Session
 from neurodecoder.qc.units import DEFAULT_CONFIG as DEFAULT_QC_CONFIG
 from neurodecoder.qc.units import UnitQC, apply_unit_qc, load_qc_config
 
-PREPROC_VERSION = 1
+# 1: first version. 2: unit QC's firing-rate floor applies to the task-period rate.
+PREPROC_VERSION = 2
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "preprocess.yaml"
 _KEYS = {"bin_ms"}
 _MAX_COUNT = np.iinfo(np.uint16).max

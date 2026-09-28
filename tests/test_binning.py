@@ -24,20 +24,22 @@ from neurodecoder.qc.units import UnitQC
 QC = UnitQC(min_label=1.0, exclude_regions=("void", "root"), min_firing_rate_hz=0.1)
 
 
-def _session(spikes: dict, time_bounds=(0.0, 1.0), rates=None) -> Session:
+def _session(spikes: dict, time_bounds=(0.0, 1.0)) -> Session:
     ids = list(spikes)
     units = pd.DataFrame(
         {f: [1.0] * len(ids) for f in UNIT_FIELDS}, index=pd.Index(ids, name="unit_id")
     )
     units["acronym"] = "CA1"
-    units["firing_rate"] = rates or [5.0] * len(ids)
+    units["firing_rate"] = 5.0
     present = {f"trials.{f}" for f in TRIAL_FIELDS} | {f"units.{f}" for f in UNIT_FIELDS}
+    trials = pd.DataFrame({f: [0.5] for f in TRIAL_FIELDS})
+    trials["intervals_0"], trials["intervals_1"] = 0.45, 0.6  # the task period for QC
     return Session(
         eid="e",
         time_bounds=time_bounds,
         spikes={u: np.asarray(t, dtype=float) for u, t in spikes.items()},
         units=units,
-        trials=pd.DataFrame({f: [0.5] for f in TRIAL_FIELDS}),
+        trials=trials,
         behaviour={},
         available=Capabilities(
             present=frozenset(present),
@@ -118,7 +120,8 @@ def test_fingerprint_changes_with_bin_width_qc_or_code_version(monkeypatch):
 
 
 def test_preprocess_applies_qc_before_binning():
-    s = _session({"a": [0.1], "b": [0.2]}, rates=[5.0, 0.01])
+    # b's only spike is outside the task period [0.45, 0.6] s, so it fails the rate floor.
+    s = _session({"a": [0.5], "b": [0.2]})
     b = preprocess_session(s, PreprocConfig(bin_ms=20, qc=QC))
     assert b.unit_ids == ("a",)
 
@@ -149,7 +152,7 @@ def test_real_round_trip_counts_equal_spike_counts(nwb_binned):
     from neurodecoder.qc.units import apply_unit_qc
 
     session = apply_unit_qc(load_session_nwb(NWB), QC)
-    assert nwb_binned.counts.shape[0] == 397
+    assert nwb_binned.counts.shape[0] == 390  # 397 before the task-period rate rule
     per_unit = nwb_binned.counts.sum(axis=1, dtype=np.int64)
     expected = np.array([len(session.spikes[u]) for u in nwb_binned.unit_ids])
     np.testing.assert_array_equal(per_unit, expected)

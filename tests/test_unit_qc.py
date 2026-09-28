@@ -20,7 +20,8 @@ QC = UnitQC(min_label=1.0, exclude_regions=("void", "root"), min_firing_rate_hz=
 def _units(**columns) -> pd.DataFrame:
     base = {
         "label": [1.0, 1.0, 0.6667, 1.0],
-        "firing_rate": [5.0, 0.05, 5.0, 5.0],
+        "task_firing_rate": [5.0, 0.05, 5.0, 5.0],
+        "firing_rate": [5.0, 5.0, 5.0, 5.0],
         "acronym": ["CA1", "CA1", "CA1", "root"],
     }
     base.update(columns)
@@ -56,14 +57,23 @@ def test_each_criterion_excludes_with_a_reason():
 
 
 def test_all_failing_criteria_are_reported():
-    result = unit_qc(_units(label=[0.0, 1.0, 1.0, 1.0], firing_rate=[0.01, 5, 5, 5]), QC)
+    result = unit_qc(_units(label=[0.0, 1.0, 1.0, 1.0], task_firing_rate=[0.01, 5, 5, 5]), QC)
     assert "label" in result.loc["u0", "reason"] and "firing rate" in result.loc["u0", "reason"]
 
 
 def test_missing_label_or_rate_fails_rather_than_passes():
-    result = unit_qc(_units(label=[np.nan, 1.0, 1.0, 1.0], firing_rate=[5.0, np.nan, 5, 5]), QC)
+    units = _units(label=[np.nan, 1.0, 1.0, 1.0], task_firing_rate=[5.0, np.nan, 5, 5])
+    result = unit_qc(units, QC)
     assert not result.loc["u0", "passed"] and "label missing" in result.loc["u0", "reason"]
     assert not result.loc["u1", "passed"] and "firing rate missing" in result.loc["u1", "reason"]
+
+
+def test_the_rate_criterion_reads_the_task_period_rate_only():
+    # u0 fires rarely over the whole recording but enough during the task, u1 the reverse.
+    result = unit_qc(_units(firing_rate=[0.01, 5.0, 5.0, 5.0]), QC)
+    assert result["passed"].tolist() == [True, False, False, False]
+    with pytest.raises(ValueError, match="task_firing_rate"):
+        unit_qc(_units().drop(columns="task_firing_rate"), QC)
 
 
 def test_location_from_atlas_id_when_there_is_no_acronym():
@@ -93,17 +103,21 @@ def test_missing_location_value_fails_the_unit():
 
 
 def _session(units: pd.DataFrame) -> Session:
-    table = units.copy()
+    table = units.drop(columns="task_firing_rate")
     for field in UNIT_FIELDS:
         if field not in table:
             table[field] = 1.0
     present = {f"trials.{f}" for f in TRIAL_FIELDS} | {f"units.{f}" for f in UNIT_FIELDS}
+    trials = pd.DataFrame({f: [1.0] for f in TRIAL_FIELDS})
+    trials["intervals_0"], trials["intervals_1"] = 0.5, 9.5  # a 9 s task period
+    # One spike each, inside the task except u1's: task rates 1/9, 0, 1/9, 1/9 Hz.
+    spikes = dict(zip(table.index, ([1.0], [9.8], [3.0], [4.0])))
     return Session(
         eid="e",
         time_bounds=(0.0, 10.0),
-        spikes={u: np.array([float(i + 1)]) for i, u in enumerate(table.index)},
+        spikes={u: np.array(t) for u, t in spikes.items()},
         units=table,
-        trials=pd.DataFrame({f: [1.0] for f in TRIAL_FIELDS}),
+        trials=trials,
         behaviour={},
         available=Capabilities(
             present=frozenset(present),
@@ -118,6 +132,9 @@ def test_apply_keeps_only_passing_units_and_their_spikes():
     assert list(out.spikes) == ["u0"]
     np.testing.assert_array_equal(out.spikes["u0"], [1.0])
     assert out.n_trials == 1
+    # The rate QC used, computed from the session's own spikes, is kept.
+    assert out.units.loc["u0", "task_firing_rate"] == pytest.approx(1 / 9)
+    assert out.units.loc["u0", "firing_rate"] == 5.0
 
 
 def test_apply_refuses_to_return_a_session_with_no_units():
@@ -134,16 +151,21 @@ NWB = (
     / f"sub-DY-016_ses-{EID}_desc-processed_behavior+ecephys.nwb"
 )
 ONE_CACHE = DATA_ROOT / "one"
+DERIVED = DATA_ROOT / "derived"
 
 
-@pytest.mark.skipif(not BWM.exists(), reason="BWM release not available")
-def test_real_bwm_floor_removes_exactly_the_sub_0_1_hz_units():
-    units = pd.read_parquet(
-        BWM / "metadata/units.parquet", columns=["label", "firing_rate", "acronym"]
-    )
+@pytest.mark.skipif(
+    not (BWM.exists() and (DERIVED / "bwm_ephys-1.2.1").exists()),
+    reason="BWM release and task-rate table needed",
+)
+def test_real_bwm_floor_removes_exactly_the_sub_0_1_hz_task_rate_units():
+    from neurodecoder.qc.task_rates import release_units
+
+    units = release_units(BWM, DERIVED)
     result = unit_qc(units, QC)
-    assert int((~result["passed"]).sum()) == 83
-    assert (units.loc[~result["passed"].to_numpy(), "firing_rate"] < 0.1).all()
+    # 83 under the whole-recording rate (PREPROC_VERSION 1); 1,402 over the task period.
+    assert int((~result["passed"]).sum()) == 1402
+    assert (units.loc[~result["passed"].to_numpy(), "task_firing_rate"] < 0.1).all()
 
 
 @pytest.mark.skipif(
@@ -164,5 +186,8 @@ def test_real_three_backends_keep_the_same_units():
         )
     ]
     assert kept[0] == kept[1] == kept[2]
-    # BWM's 398 good units minus probe00_27, which fires at 0.0965 Hz.
-    assert len(kept[0]) == 397 and "probe00_27" not in kept[0]
+    # BWM's 398 good units minus 8 under 0.1 Hz during the task: probe00_27 (0.0965 Hz
+    # over the recording, 0.0013 Hz in the task), probe01_280, and 6 units that fire
+    # mostly after the task (see DECISIONS.md). 397 under PREPROC_VERSION 1.
+    assert len(kept[0]) == 390 and "probe00_27" not in kept[0]
+    assert "probe01_953" not in kept[0] and "probe00_514" in kept[0]

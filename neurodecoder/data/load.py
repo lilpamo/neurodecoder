@@ -12,7 +12,15 @@ from neurodecoder.data.cache import SessionCache
 from neurodecoder.data.session import Session
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "data.yaml"
-_CONFIG_KEYS = {"data_root", "bwm_ephys", "bwm_behavior", "nwb_000409", "one_cache", "cache"}
+_CONFIG_KEYS = {
+    "data_root",
+    "bwm_ephys",
+    "bwm_behavior",
+    "nwb_000409",
+    "one_cache",
+    "cache",
+    "derived",
+}
 
 
 @dataclass(frozen=True)
@@ -23,6 +31,8 @@ class DataConfig:
     nwb_dir: Path
     one_cache_root: Path
     cache_root: Path
+    # Tables derived from a release, e.g. qc/task_rates.py's; None when not configured.
+    derived_root: Path | None = None
 
 
 def load_data_config(path: str | os.PathLike = DEFAULT_CONFIG) -> DataConfig:
@@ -39,6 +49,7 @@ def load_data_config(path: str | os.PathLike = DEFAULT_CONFIG) -> DataConfig:
         nwb_dir=root / raw["nwb_000409"],
         one_cache_root=root / raw["one_cache"],
         cache_root=root / raw["cache"],
+        derived_root=root / raw["derived"],
     )
 
 

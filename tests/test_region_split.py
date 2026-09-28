@@ -36,7 +36,13 @@ def _manifest(eids=SESSIONS) -> Manifest:
 
 def _units(sessions=SESSIONS) -> pd.DataFrame:
     rows = [
-        {"eid": eid, "acronym": acr, "beryl_acronym": beryl, "label": label, "firing_rate": 5.0}
+        {
+            "eid": eid,
+            "acronym": acr,
+            "beryl_acronym": beryl,
+            "label": label,
+            "task_firing_rate": 5.0,
+        }
         for eid, groups in sessions.items()
         for acr, beryl, n, label in groups
         for _ in range(n)
@@ -122,16 +128,19 @@ def test_region_split_round_trips(tmp_path):
 DATA_ROOT = Path(os.environ.get("NEURODECODER_DATA_ROOT", "~/data/neurodecoder")).expanduser()
 EPHYS = DATA_ROOT / "bwm_compressed/bwm_ephys/1.2.1"
 BEHAVIOUR = DATA_ROOT / "bwm_compressed/bwm_behavior/2.0.0"
+DERIVED = DATA_ROOT / "derived"
 
 
 @pytest.mark.skipif(
-    not (EPHYS.exists() and BEHAVIOUR.exists()), reason="BWM releases not available"
+    not (EPHYS.exists() and BEHAVIOUR.exists() and (DERIVED / "bwm_ephys-1.2.1").exists()),
+    reason="BWM releases and task-rate table not available",
 )
 def test_real_cp_split():
     from neurodecoder.data.manifest import build_manifest
+    from neurodecoder.qc.task_rates import release_units
 
     manifest = build_manifest(EPHYS, BEHAVIOUR)
-    units = pd.read_parquet(EPHYS / "metadata/units.parquet")
+    units = release_units(EPHYS, DERIVED)
     split = held_out_region(manifest, units, PREPROC, region="CP")
     assert_split_valid(split, context_bins=50, manifest_provenance=manifest.provenance)
     assert len(split.partitions["test"]) == 43
