@@ -6,12 +6,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from neurodecoder.data.backends import dandi_nwb
 from neurodecoder.data.backends.dandi_nwb import (
+    _is_url,
     _keypoint_name,
     _map_choice,
     _map_feedback,
     _pose,
     _split_contrast,
+    dandi_asset_url,
     load_session_nwb,
 )
 
@@ -24,6 +27,12 @@ NWB_PATH = (
 )
 
 needs_nwb = pytest.mark.skipif(not NWB_PATH.exists(), reason=f"real NWB file not at {NWB_PATH}")
+needs_network = pytest.mark.skipif(
+    os.environ.get("NEURODECODER_NETWORK_TESTS") != "1",
+    reason="set NEURODECODER_NETWORK_TESTS=1 to stream from DANDI",
+)
+# Same blob (same SHA-256) as the local file, in DANDI 000409 version 0.260309.1324.
+S3_URL = "https://dandiarchive.s3.amazonaws.com/blobs/d0f/ba3/d0fba38f-324e-4bec-b111-95365c2617b1"
 
 
 def test_choice_mapping():
@@ -60,6 +69,38 @@ def test_contrast_split_rejects_fractions():
     # NWB stores percent; a 0-1 value here means the source changed convention.
     with pytest.raises(ValueError, match="percent"):
         _split_contrast(pd.Series(["left", "right"]), pd.Series([0.25, 0.5]))
+
+
+def test_urls_are_streamed_and_paths_are_local():
+    assert _is_url(S3_URL)
+    assert not _is_url(str(NWB_PATH))
+    assert not _is_url(NWB_PATH)
+
+
+def _fake_dandi_api(asset_results, content_urls, seen):
+    def get_json(url):
+        seen.append(url)
+        if "/assets/?" in url:
+            return {"count": len(asset_results), "results": asset_results}
+        return {"contentUrl": content_urls}
+
+    return get_json
+
+
+def test_resolver_returns_the_s3_url_from_the_pinned_version(monkeypatch):
+    seen = []
+    urls = ["https://api.dandiarchive.org/api/assets/a1/download/", S3_URL]
+    monkeypatch.setattr(dandi_nwb, "_get_json", _fake_dandi_api([{"asset_id": "a1"}], urls, seen))
+    assert dandi_asset_url(EID) == S3_URL
+    assert all(f"/versions/{dandi_nwb.DANDISET_VERSION}/" in u for u in seen)
+    assert not any("/draft/" in u for u in seen)
+
+
+def test_resolver_rejects_zero_or_many_matches(monkeypatch):
+    for results in ([], [{"asset_id": "a1"}, {"asset_id": "a2"}]):
+        monkeypatch.setattr(dandi_nwb, "_get_json", _fake_dandi_api(results, [S3_URL], []))
+        with pytest.raises(ValueError, match="expected 1"):
+            dandi_asset_url(EID)
 
 
 def test_keypoint_names_are_snake_case():
@@ -202,6 +243,30 @@ def test_camera_signals_share_their_camera_clock(session):
         clock = b[f"motion_energy_{cam}"].timestamps
         np.testing.assert_array_equal(b[f"pose_{cam}"].timestamps, clock)
         np.testing.assert_array_equal(b[f"pupil_{cam}"].timestamps, clock)
+
+
+@needs_network
+def test_resolver_finds_the_verified_asset():
+    assert dandi_asset_url(EID) == S3_URL
+
+
+@needs_network
+@needs_nwb
+def test_streamed_load_equals_local_load(session):
+    remote = load_session_nwb(dandi_asset_url(EID))
+    assert remote.eid == session.eid
+    assert remote.time_bounds == session.time_bounds
+    pd.testing.assert_frame_equal(remote.units, session.units)
+    pd.testing.assert_frame_equal(remote.trials, session.trials)
+    assert remote.spikes.keys() == session.spikes.keys()
+    for unit_id, times in session.spikes.items():
+        np.testing.assert_array_equal(remote.spikes[unit_id], times)
+    assert remote.behaviour.keys() == session.behaviour.keys()
+    for name, series in session.behaviour.items():
+        np.testing.assert_array_equal(remote.behaviour[name].timestamps, series.timestamps)
+        np.testing.assert_array_equal(remote.behaviour[name].data, series.data)
+    assert remote.available.present == session.available.present
+    assert dict(remote.available.missing) == dict(session.available.missing)
 
 
 @needs_nwb

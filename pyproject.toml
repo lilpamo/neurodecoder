@@ -13,6 +13,7 @@ dependencies = [
     "pyarrow",
     "h5py",
     "pynwb",
+    "remfile",
     "ONE-api",
     "ibllib",
     "PyYAML",

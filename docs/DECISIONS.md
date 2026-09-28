@@ -6,11 +6,54 @@ first.
 
 ---
 
+### 2026-09-27 — Add `remfile` to stream NWB files from DANDI
+
+**Decision:** Add `remfile` (0.1.15; depends only on `h5py`, `numpy`,
+`requests`) as a dependency. `load_session_nwb` accepts an `https://` URL as
+well as a local path, and streams the URL with `remfile` → `h5py` → `pynwb`,
+fetching only the byte ranges it reads. `dandi_asset_url(eid)` resolves an
+IBL eid to its `desc-processed` asset's S3 URL through DANDI's REST API (stdlib
+`urllib`, so the much heavier `dandi` package isn't needed).
+
+**Why:** ROADMAP Phase 1 says to stream `desc-processed` assets from 000409
+via `remfile` + `h5py` + `pynwb` and not bulk-download; ROADMAP §8 lists
+`remfile` as the Phase 1 streaming addition.
+
+**Pinned DANDI version:** the resolver reads the published, immutable
+version **`0.260309.1324`** (2026-03-09), never the draft, which can change
+under us just as ONE's data revisions do. For `d23a44ef` the asset in that
+version has the same ID and SHA-256 as the local, checksum-verified file.
+Moving to a newer version is a deliberate change, recorded here.
+
+**Verified:** streaming session `d23a44ef` equals the local load in every
+field: units, trials, all 1,961 spike trains, all 10 behaviour series and
+the capability report (`test_streamed_load_equals_local_load`).
+
+**Cost, measured on this machine:** opening the file takes about 38 s
+(pynwb reads the file's structure with many small requests, so it's
+latency-bound). A full streamed session load took about **20 minutes**,
+versus about 6 s from a local file. `remfile` fetches one range at a time
+over one connection, and a single connection to S3 from here gets about
+0.3–0.4 MB/s. Streaming is therefore for opening a session once, or for
+reading just its metadata or a part of it. Anything repeated should go
+through the Phase 1 cache (`data/cache.py`), as the roadmap already says.
+`remfile`'s `disk_cache` option and its private `_max_threads` setting could
+speed this up, but they aren't used: the first belongs with the cache
+design, and the second is a private API.
+
+**Alternatives considered:** the `dandi` package (much heavier, and only
+needed here for the asset lookup); downloading whole files (what the
+roadmap says not to do across the dataset).
+
+**Consequences:** the two streaming tests only run when
+`NEURODECODER_NETWORK_TESTS=1` is set, so CI and routine runs stay offline
+and fast. The full comparison test takes about 20 minutes here.
+
 ### 2026-09-27 — DANDI NWB backend mappings (`neurodecoder/data/backends/dandi_nwb.py`)
 
-**Decision:** `load_session_nwb(path)` reads DANDI 000409 `desc-processed` NWB
-files into a `Session`. For now it reads local files; streaming via `remfile`
-comes next. Every mapping was checked value by value against ONE for session
+**Decision:** `load_session_nwb(source)` reads DANDI 000409 `desc-processed`
+NWB files into a `Session`, from a local path or streamed from a URL (see
+"Add `remfile`"). Every mapping was checked value by value against ONE for session
 `d23a44ef-1402-4ed7-97f5-47e9a7a504d9` (sorting revision `2024-05-06`, trials
 revision `2025-03-03`), with zero differences:
 

@@ -3,13 +3,22 @@
 Every mapping to IBL's ALF conventions below was checked value by value against
 ONE for session d23a44ef-1402-4ed7-97f5-47e9a7a504d9 (see docs/DECISIONS.md).
 Values outside the checked encodings raise instead of being guessed.
+
+Files are read from a local path or streamed from an https URL with remfile, which
+fetches only the byte ranges that are read; nothing is downloaded in bulk.
 """
 
+import contextlib
+import json
 import os
 import re
+import urllib.parse
+import urllib.request
 
+import h5py
 import numpy as np
 import pandas as pd
+import remfile
 from pynwb import NWBHDF5IO
 
 from neurodecoder.data.session import (
@@ -22,6 +31,11 @@ from neurodecoder.data.session import (
     Session,
     TimeSeries,
 )
+
+DANDI_API = "https://api.dandiarchive.org/api"
+DANDISET = "000409"
+# A published, immutable version: the draft can change under us, like ONE revisions.
+DANDISET_VERSION = "0.260309.1324"
 
 _TRIAL_TIMES = {
     "intervals_0": "start_time",
@@ -220,17 +234,56 @@ def _drop_all_nan(table: pd.DataFrame, group: str, fields, missing: dict) -> pd.
     return table.drop(columns=empty)
 
 
-def load_session_nwb(path: str | os.PathLike) -> Session:
+def _is_url(source) -> bool:
+    return isinstance(source, str) and source.startswith(("https://", "http://"))
+
+
+@contextlib.contextmanager
+def _open_nwb(source):
+    """Yield the NWBFile at a local path, or streamed from an http(s) URL."""
+    with contextlib.ExitStack() as stack:
+        if _is_url(source):
+            remote = stack.enter_context(contextlib.closing(remfile.File(source)))
+            h5 = stack.enter_context(h5py.File(remote, "r"))
+            io = stack.enter_context(NWBHDF5IO(file=h5, mode="r", load_namespaces=True))
+        else:
+            io = stack.enter_context(NWBHDF5IO(str(source), "r", load_namespaces=True))
+        yield io.read()
+
+
+def _get_json(url: str) -> dict:
+    with urllib.request.urlopen(url, timeout=60) as response:
+        return json.load(response)
+
+
+def dandi_asset_url(eid: str, *, dandiset=DANDISET, version=DANDISET_VERSION) -> str:
+    """S3 URL of one IBL session's `desc-processed` NWB file in a pinned DANDI version."""
+    base = f"{DANDI_API}/dandisets/{dandiset}/versions/{version}/assets"
+    pattern = f"sub-*/sub-*_ses-{eid}_desc-processed_behavior+ecephys.nwb"
+    found = _get_json(f"{base}/?" + urllib.parse.urlencode({"glob": pattern}))
+    if found["count"] != 1:
+        raise ValueError(
+            f"expected 1 desc-processed asset for eid {eid} in {dandiset}@{version}, "
+            f"found {found['count']}"
+        )
+    meta = _get_json(f"{base}/{found['results'][0]['asset_id']}/")
+    s3 = [u for u in meta.get("contentUrl", []) if "s3.amazonaws.com" in u]
+    if len(s3) != 1:
+        raise ValueError(f"asset for eid {eid} has {len(s3)} S3 content URLs, expected 1")
+    return s3[0]
+
+
+def load_session_nwb(source: str | os.PathLike) -> Session:
     """Read one DANDI 000409 `desc-processed` NWB file into a Session.
 
+    source: a local path, or an https URL (e.g. from `dandi_asset_url`) to stream.
     Spike times and all other times are seconds on the session clock. The wheel is
     the raw encoder position (radians) and pupil the raw diameter; smoothing belongs
     to preprocessing. Video signals get one entry per camera, each on its own clock.
     """
-    with NWBHDF5IO(str(path), "r", load_namespaces=True) as io:
-        nwb = io.read()
+    with _open_nwb(source) as nwb:
         if not nwb.session_id:
-            raise ValueError(f"{path}: NWB session_id (the IBL eid) is missing")
+            raise ValueError(f"{source}: NWB session_id (the IBL eid) is missing")
         units, spikes = _units_and_spikes(nwb)
         trials = _trials(nwb)
         behaviour, missing_behaviour = _behaviour(nwb)
