@@ -6,6 +6,126 @@ first.
 
 ---
 
+### 2026-09-27 — Add `remfile` to stream NWB files from DANDI
+
+**Decision:** Add `remfile` (0.1.15; depends only on `h5py`, `numpy`,
+`requests`) as a dependency. `load_session_nwb` accepts an `https://` URL as
+well as a local path, and streams the URL with `remfile` → `h5py` → `pynwb`,
+fetching only the byte ranges it reads. `dandi_asset_url(eid)` resolves an
+IBL eid to its `desc-processed` asset's S3 URL through DANDI's REST API (stdlib
+`urllib`, so the much heavier `dandi` package isn't needed).
+
+**Why:** ROADMAP Phase 1 says to stream `desc-processed` assets from 000409
+via `remfile` + `h5py` + `pynwb` and not bulk-download; ROADMAP §8 lists
+`remfile` as the Phase 1 streaming addition.
+
+**Pinned DANDI version:** the resolver reads the published, immutable
+version **`0.260309.1324`** (2026-03-09), never the draft, which can change
+under us just as ONE's data revisions do. For `d23a44ef` the asset in that
+version has the same ID and SHA-256 as the local, checksum-verified file.
+Moving to a newer version is a deliberate change, recorded here.
+
+**Verified:** streaming session `d23a44ef` equals the local load in every
+field: units, trials, all 1,961 spike trains, all 10 behaviour series and
+the capability report (`test_streamed_load_equals_local_load`).
+
+**Cost, measured on this machine:** opening the file takes about 38 s
+(pynwb reads the file's structure with many small requests, so it's
+latency-bound). A full streamed session load took about **20 minutes**,
+versus about 6 s from a local file. `remfile` fetches one range at a time
+over one connection, and a single connection to S3 from here gets about
+0.3–0.4 MB/s. Streaming is therefore for opening a session once, or for
+reading just its metadata or a part of it. Anything repeated should go
+through the Phase 1 cache (`data/cache.py`), as the roadmap already says.
+`remfile`'s `disk_cache` option and its private `_max_threads` setting could
+speed this up, but they aren't used: the first belongs with the cache
+design, and the second is a private API.
+
+**Alternatives considered:** the `dandi` package (much heavier, and only
+needed here for the asset lookup); downloading whole files (what the
+roadmap says not to do across the dataset).
+
+**Consequences:** the two streaming tests only run when
+`NEURODECODER_NETWORK_TESTS=1` is set, so CI and routine runs stay offline
+and fast. The full comparison test takes about 20 minutes here.
+
+### 2026-09-27 — DANDI NWB backend mappings (`neurodecoder/data/backends/dandi_nwb.py`)
+
+**Decision:** `load_session_nwb(source)` reads DANDI 000409 `desc-processed`
+NWB files into a `Session`, from a local path or streamed from a URL (see
+"Add `remfile`"). Every mapping was checked value by value against ONE for session
+`d23a44ef-1402-4ed7-97f5-47e9a7a504d9` (sorting revision `2024-05-06`, trials
+revision `2025-03-03`), with zero differences:
+
+| Canonical | NWB | Check against ONE |
+|---|---|---|
+| `intervals_0/1`, `stimOn/stimOff/goCue/firstMovement/response/feedback_times` | `start_time`, `stop_time`, `gabor_stimulus_onset/offset_time`, `auditory_cue_time`, `wheel_movement_onset_time`, `choice_registration_time`, `feedback_time` | max \|diff\| = 0 on all 410 trials |
+| `choice` | `mouse_wheel_choice`: `clockwise` → **+1**, `counter_clockwise` → **−1** | crosstab exact: 118 / 292, no off-diagonal |
+| `feedbackType` | `is_mouse_rewarded` True → +1, False → −1 | exact: 304 / 106 |
+| `contrastLeft/Right` | `gabor_stimulus_contrast` (**percent**) split by `gabor_stimulus_side`, ÷100, NaN off-side | exact |
+| `probabilityLeft` | `probability_left` | exact |
+| `label` | `ibl_quality_score` (0, ⅓, ⅔, 1) | equals ONE `clusters.metrics.label` |
+| `depths` | `distance_from_probe_tip_um` | equals ONE `clusters.depths` |
+| `firing_rate` | `firing_rate` | exact |
+
+- **Unit ID** is NWB's `unit_name`, e.g. `probe00_0`, i.e. probe plus ONE's
+  `cluster_id` (same order as ONE on both probes). `cluster_id`,
+  `cluster_uuid` and `location` (full Allen region name, via each unit's
+  `max_electrode`) are kept as extra columns for matching against other
+  backends. `probe_name` uses IBL's lowercase `probe00`; NWB's column says
+  `Probe00`.
+- **Unrecognised values raise.** An unknown choice string (e.g. a no-go
+  trial, of which this session has none), an unknown stimulus side, or a
+  contrast outside IBL's percent set (0, 6.25, 12.5, 25, 50, 100) raises
+  instead of being guessed. The percent check also catches a source that
+  switches to fractions.
+- **`behaviour.wheel` is the raw `WheelPosition`** (radians, 755,552 irregular
+  samples), not IBL's smoothed 1 kHz position/velocity. The smoothing filter is
+  a preprocessing choice (R6), and ROADMAP Phase 2 warns it changes wheel R².
+- **`time_bounds` is the span of all loaded data** (spikes, trial times,
+  wheel), because the processed file holds no raw recording to define it. For
+  this session that's 0.0008–3668.940 s. The wheel's last sample is 2 ms after
+  the last spike, so spike-only bounds would wrongly reject it.
+- **Declared missing, with reasons:** `units.acronym` (NWB has full region
+  names; mapping names to acronyms isn't implemented), `units.x/y/z` (NWB
+  electrode coordinates are Allen CCF µm, and the BWM convention isn't
+  verified yet), and `behaviour.lick` (events, not a sampled signal).
+- **Per-camera video signals are loaded**, one key per camera, each on its own
+  clock:
+  - `motion_energy_{left,right,body}` come from
+    `motion_energy/{Left,Right,Body}CameraMotionEnergy`.
+  - `pupil_{left,right}` come from the **raw** `pupil/{Left,Right}PupilDiameter`,
+    not `...Smoothed`, because smoothing is preprocessing (R6). The NaNs in it
+    are kept (25 left, 221 right in `d23a44ef`).
+  - `pose_{left,right,body}` come from `pose_estimation/{Left,Right,Body}Camera`.
+    Each camera's keypoints are stacked into one series with named columns
+    `{keypoint}_x`, `{keypoint}_y` (px) and `{keypoint}_likelihood`, keypoints
+    in alphabetical order (body 1, left 6, right 11 in `d23a44ef`).
+  - The **likelihood is kept unthresholded**, matching ibl-ai-agent's
+    `likelihood_thr=0`, because filtering low-confidence points is a
+    preprocessing choice.
+  - Keypoint names are NWB's series names in snake_case
+    (`RightPupilBottom` → `right_pupil_bottom`), taken as the file gives them.
+    Matching them to BWM's pose naming is a cross-backend question for later.
+- **Checked before stacking:** within each camera, every pose keypoint shares
+  exactly the same timestamps, and those equal the camera's motion-energy and
+  pupil timestamps. The backend raises if a keypoint is on its own clock, and
+  it rejects rate-sampled series without timestamps rather than rebuilding
+  them.
+- **A signal absent from a file is declared missing** ("no `module/name` in
+  this NWB file") instead of raising. About 4% of BWM sessions have no pose,
+  per ibl-ai-agent's docs.
+
+**Resolved contract issue:** the first version of this backend couldn't hold
+IBL's three cameras (body ~30 Hz, left ~60 Hz, right ~150 Hz, with different
+timestamps), because the `Session` contract had one `TimeSeries` per field.
+The contract now has one key per camera (see "The `Session` contract"), and
+this backend loads all of them.
+
+**Consequences:** Loading this session takes about 6 s, including full
+contract validation. The tests needing the real file are skipped in CI (the
+file is 1.3 GB and not in the repo); the mapping tests run everywhere.
+
 ### 2026-09-27 — The `Session` contract (Phase 1, `neurodecoder/data/session.py`)
 
 **Decision:** Every backend returns a `Session` that validates itself on
