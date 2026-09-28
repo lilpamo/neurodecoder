@@ -6,6 +6,53 @@ first.
 
 ---
 
+### 2026-09-28 — Phase 2 order, and unit QC (`neurodecoder/qc/units.py`, `configs/qc.yaml`)
+
+**Signed off by the user before any Phase 2 code (CLAUDE.md §10):**
+- **Module order:** `qc/units` → `preprocess/binning` (defines
+  `PREPROC_VERSION`) → `splits/registry` + `guards` → `preprocess/normalize`
+  → `preprocess/windows` → `targets/`. Binning comes before splits because
+  the split file's hash covers `PREPROC_VERSION`, and splits come before
+  normalisation because `normalize.py` takes a split object
+  (`docs/SPLITS_AND_LEAKAGE.md`).
+- **Unit QC**, with the thresholds fixed now, before any metric exists, so
+  they can't be tuned against results (R6):
+
+| Criterion | Value | Evidence at sign-off (BWM release) |
+|---|---|---|
+| IBL QC label | `== 1.0` | label = fraction of 3 metrics passed; **100%** of label-1 units pass IBL's sliding-RP test |
+| Location | not `void`/`root` | 307 label-1 units are located there (see "Session manifest") |
+| Firing rate | `≥ 0.1 Hz` | removes 83 of 75,395 good units (0.11%); 1 Hz would remove 8.3%, NEDS's 5 Hz 45.8% |
+| Separate RPV ceiling | none | redundant with label 1 for IBL data; revisit for non-IBL NWB (Phase 11), which has no IBL label |
+
+0.1 Hz was chosen to stay closest to BWM's published good-unit set, which
+Phase 3's baselines will be compared against.
+
+**Implementation:**
+- `unit_qc(units, qc)` returns `passed` plus a `reason` naming **every**
+  failed criterion. A missing label, firing rate or location value **fails**
+  the unit instead of passing it (§7).
+- `apply_unit_qc(session, qc)` keeps the passing units and their spikes, and
+  raises if none pass (§10).
+- **Location comes from whichever field the backend provides:** BWM's
+  `acronym`, ONE's Allen `atlas_id` (0 = void, 997 = root) or NWB's full
+  names in `location`. With none of them, QC raises rather than silently
+  skipping the in-brain criterion.
+- `UnitQC.hash()` changes whenever any threshold does. `PREPROC_VERSION`
+  (next module) will incorporate it.
+
+**Verified on `d23a44ef`:**
+- After QC, **all three backends keep exactly the same 397 units**: BWM's 398
+  good units minus `probe00_27` (0.0965 Hz).
+- ONE's `atlas_id == 997` and NWB's `location == "root"` pick out the same
+  units.
+- Across the whole BWM release, QC removes exactly the 83 sub-0.1 Hz units.
+
+**Known cross-backend residual:** BWM's good-unit table also drops 6 label-1,
+in-brain units for an unrecorded reason (see "Session manifest"). QC on
+ONE/NWB would keep those 6, so the unit sets can differ by them on the
+sessions where they occur. `d23a44ef` has none.
+
 ### 2026-09-28 — BWM backend loads behaviour from `bwm_behavior` 2.0.0
 
 **Decision:** `load_session_bwm(eid, root, behaviour_root=None)` decodes the

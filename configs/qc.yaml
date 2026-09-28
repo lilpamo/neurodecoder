@@ -1,0 +1,10 @@
+# Unit QC, signed off 2026-09-28 (see docs/DECISIONS.md).
+# Changing any value changes the preprocessed data: bump PREPROC_VERSION (R6), and
+# never change it to improve a metric.
+
+# IBL's QC label is the fraction of 3 metrics passed (sliding refractory period,
+# noise cutoff, amplitude). 1.0 already implies the refractory-period check.
+min_label: 1.0
+# Units located outside the brain or with no region assigned.
+exclude_regions: [void, root]
+min_firing_rate_hz: 0.1
