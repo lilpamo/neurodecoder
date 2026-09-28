@@ -6,6 +6,68 @@ first.
 
 ---
 
+### 2026-09-28 — Session manifest (`neurodecoder/data/manifest.py`), and what BWM's "good units" are
+
+**Decision:** `build_manifest(ephys_root, behaviour_root)` builds two tables
+from the metadata of the extracted `bwm_ephys` 1.2.1 and `bwm_behavior` 2.0.0
+releases, without loading any session. Both release versions are checked
+through their `manifest.json`. `write_manifest` / `read_manifest` store them
+as `sessions.parquet`, `insertions.parquet` and `provenance.json`, replacing
+the old copy atomically.
+
+- **`sessions`, one row per eid:** subject, lab, date, session number,
+  `n_probes`, `n_units` (all clusters), `n_label1_units`, `n_good_units`,
+  `n_trials`, `n_included_trials` (`bwm_include`), `regions` (sorted Beryl
+  acronyms of the good units) and `modalities`.
+- **`modalities` uses canonical names** (`wheel`, `pose_left/right/body`)
+  and says what the **`bwm_behavior` release holds**, not what
+  `load_session("bwm")` loads: that backend doesn't read behaviour yet.
+  Motion energy and pupil aren't in `bwm_behavior` at all.
+- **`insertions`, one row per probe:** unit and channel counts, plus the
+  probe's **tip** and **top** positions in **meters**, bregma-relative (the
+  same frame as the units' `x/y/z`). The tip is the mean position of the
+  channels nearest the probe tip (smallest `localCoordinates_y`), and the top
+  is the mean of the channels farthest from it. The release's channel table
+  has `mlapdv_x/y/z` (µm) and `localCoordinates_x/y`, not the `x/y/z` /
+  `axial_um` its docs list.
+- **Every count is computed from the underlying tables** and must equal the
+  release's own per-session values (`n_insertions`, `n_good_units`,
+  `n_trials`, `n_included_trials`), or building raises.
+- **No config keys.** The two release folders are arguments, and nothing
+  needs to find the manifest through config yet. Keys get added when a
+  command-line tool does.
+
+**Finding: BWM's "good units" are not simply `label == 1`.** 75,708 clusters
+have `label == 1`, but the release's good-unit table holds 75,395, a strict
+subset (none outside it). The 313 dropped label-1 units, spread over 89 of
+699 probes:
+- **307 are located in `void` (187) or `root` (120)**, i.e. outside the brain
+  or without a region. That matches ibl-ai-agent's `INVALID_ACRONYMS` /
+  `INVALID_BERYL_ACRONYMS = {"void", "root"}` filter.
+- **6 are unexplained:** 3 in SCiw, 2 in CUL4 5, 1 in CENT2. Their Beryl
+  mappings are valid (SCm, CUL4 5, CENT2, checked with `iblatlas`), other
+  units in the same regions on the same probes were kept, and their label,
+  `bitwise_fail`, spike counts, firing rates and presence ratios are normal.
+  The reason isn't recorded anywhere I found.
+
+The manifest therefore checks that good units ⊆ `label == 1` (and raises
+otherwise), rather than equality. It reports `n_label1_units` next to
+`n_good_units` so the gap stays visible. **Phase 2 consequence:** ROADMAP's
+planned `qc/units.py` default ("IBL's own QC label, plus firing rate floor,
+plus RP ceiling") would keep units that aren't in the brain unless it also
+excludes `void`/`root`. Decide that explicitly there. For session `d23a44ef`
+the two sets happen to coincide, which is why the earlier NWB-vs-BWM check
+matched exactly.
+
+**Verified on the real releases** (building takes about 1 s):
+- Totals equal every count verified earlier: 459 sessions, 139 mice, 12
+  labs, 699 probes, 75,395 good units, 621,733 clusters, 295,920 trials.
+- `d23a44ef`: 2 probes, 1,961 clusters, 398 good units, 410 trials.
+- 15 sessions have no pose.
+- The tip is deeper than the top on all 699 probes. The median tip-to-top
+  span is 3.78 mm, matching Neuropixels 1.0's 3.84 mm recording length.
+- 99.98% of good units lie between their probe's tip and top (±10 µm).
+
 ### 2026-09-28 — `load_session` entry point and `configs/data.yaml`
 
 **Decision:** `load_session(eid, backend="bwm", *, config=None,
