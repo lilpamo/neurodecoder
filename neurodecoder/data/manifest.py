@@ -35,6 +35,17 @@ class Manifest:
     provenance: dict
 
 
+def manifest_versions() -> dict:
+    """What a manifest built by this code depends on: its code version and release versions."""
+    return {
+        "manifest_version": MANIFEST_VERSION,
+        "sources": {
+            bwm_compressed.DATASET_NAME: bwm_compressed.DATASET_VERSION,
+            BEHAVIOUR_DATASET: BEHAVIOUR_VERSION,
+        },
+    }
+
+
 def _check_release(root: Path, name: str, version: str) -> None:
     manifest = json.loads((root / "manifest.json").read_text())
     found = (manifest.get("dataset_name"), manifest.get("dataset_version"))
@@ -152,11 +163,7 @@ def build_manifest(ephys_root: str | os.PathLike, behaviour_root: str | os.PathL
     )
     probe_table = probe_table.sort_values(["eid", "probe_name", "pid"])
     provenance = {
-        "manifest_version": MANIFEST_VERSION,
-        "sources": {
-            bwm_compressed.DATASET_NAME: bwm_compressed.DATASET_VERSION,
-            BEHAVIOUR_DATASET: BEHAVIOUR_VERSION,
-        },
+        **manifest_versions(),
         "n_sessions": int(len(sessions)),
         "n_insertions": int(len(probe_table)),
     }

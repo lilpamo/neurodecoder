@@ -6,6 +6,81 @@ first.
 
 ---
 
+### 2026-09-28 — Split registry and guards (`neurodecoder/splits/`)
+
+**Decision:** four of the six split kinds in `docs/SPLITS_AND_LEAKAGE.md` are
+built by `splits/registry.py`, checked by `splits/guards.assert_split_valid`,
+and saved as JSON with a hash.
+
+| Kind | Builder | Partitions |
+|---|---|---|
+| `held_out_animal` | `held_out_groups(by="subject", n_test, n_calibration, seed)` | whole animals; calibration is its own set of animals |
+| `held_out_lab` | `held_out_groups(by="lab", …)` | whole labs, the same way |
+| `held_out_session` | `held_out_session(seed)` | one session of each animal with ≥ 2 sessions is test; everything else is train |
+| `within_session` | `within_session(trials, train_fraction, gap_s)` | per session, one early train block and one late test block |
+
+- **Seeds are required keyword arguments** with no default (R7). Groups are
+  sorted and then shuffled with `numpy.random.default_rng(seed)`. The saved
+  file, not the seed, is the record: another numpy version could draw
+  differently from the same seed.
+- **Group splits cover the whole manifest** (all 459 sessions). Filtering for
+  a task, such as sessions with pose, happens downstream and must not re-split.
+- **`within_session` blocks are bounded by trials.** The train block runs from
+  the first trial's start to the end of the last train trial
+  (`round(train_fraction · n_trials)` trials). The test block starts at the
+  first later trial whose first bin is at least `ceil(gap_s · rate)` empty bins
+  after the train block. Trials in between belong to neither partition, and so
+  does time before the first trial or after the last. `gap_s ≥ 2 s` is
+  enforced when the split is built.
+- **No calibration partition yet for `held_out_session` or `within_session`.**
+  Phase 7's cross-animal conformal needs one only for animal splits. It can be
+  added when a within-session calibration result is actually needed.
+- **The hash** is the sha256 of canonical JSON (sorted keys, no NaN) of the
+  whole split: kind, params, partitions, per-session records, the manifest
+  provenance and the preprocessing `{fingerprint, bin_ms}`. The fingerprint
+  covers `PREPROC_VERSION`. `load_split` refuses a file whose content no longer
+  matches its hash. **`save_split` never replaces an existing file with a
+  different split**, so a split used by a result can't change under it.
+- **The guard raises and never warns.** It checks:
+  - the split's `manifest_version`, release versions and preprocessing
+    fingerprint equal the current ones (by default, this code's and
+    `configs/*.yaml`'s);
+  - partitions are known, non-empty and include train and test;
+  - for group splits, no subject or lab is shared by any pair of partitions,
+    calibration included;
+  - for non-temporal splits, no session is shared;
+  - for `within_session`, blocks share no bin and have at least
+    `max(context_bins, 2 s)` empty bins between them;
+  - each listed trial is in exactly one partition and lies wholly inside that
+    partition's block.
+
+  Each check has a test that feeds it a broken split.
+- **The split file stores every trial's interval,** so the guard can check
+  trial integrity without loading sessions. That makes a `within_session`
+  file over all 459 sessions 12.6 MB. A `held_out_animal` file is 0.07 MB.
+
+**Verified on the full manifest (459 sessions, 139 animals, 12 labs):**
+- **`held_out_animal`** (20 test, 15 calibration, seed 0): 354 / 52 / 53
+  sessions. The roadmap asks for ≥ 20 test sessions.
+- **`held_out_lab`** (2 test, 1 calibration): 343 / 44 / 72 sessions.
+- **`held_out_session`**: 352 train, 107 test.
+- **`within_session`** on every session (0.8, 2 s): at most 1 trial per
+  session falls in the gap. Actual gaps range from 3.4 s to 66.3 s (median
+  4.8 s), because the test block starts at a trial start.
+- Every split passes the guard at a 50-bin context. Every split builds in under
+  a second, from a manifest that builds in 0.7 s.
+
+**Not built yet:**
+- **`held_out_region`** needs per-session counts of QC-passing units per
+  region. The rule is ≥ 20% of units in R for test and zero units in R for
+  train. The manifest's `regions` come from the release's good units, not from
+  our QC.
+- **`held_out_config`** needs a definition of a "standard" probe configuration.
+
+The roadmap's Phase 2 success criterion ("all five split types generate and
+validate") isn't met until both exist. The split doc's table lists six kinds,
+so the roadmap's "five" is out of date by one.
+
 ### 2026-09-28 — Binning and `PREPROC_VERSION` (`neurodecoder/preprocess/binning.py`)
 
 **Decision:** `preprocess_session(session, config)` applies unit QC and then
