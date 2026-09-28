@@ -1,0 +1,142 @@
+"""assert_split_valid: the first call of every training and evaluation entry point.  [R1, R2]
+
+It raises and never warns. It checks (docs/SPLITS_AND_LEAKAGE.md, "The guard API"):
+- the manifest and preprocessing the split was built against are the current ones;
+- partitions are known and non-empty, and include train and test;
+- across partitions (calibration included), animal-level splits share no subject,
+  lab-level splits share no lab, and non-temporal splits share no session;
+- within a session, the blocks share no bin and are at least max(context, 2 s) apart;
+- every listed trial is in one partition only and lies wholly inside its block.
+"""
+
+import math
+from itertools import combinations
+
+from neurodecoder.data.manifest import manifest_versions
+from neurodecoder.preprocess.binning import load_preproc_config
+from neurodecoder.splits.registry import (
+    GROUP_KINDS,
+    KINDS,
+    MIN_GAP_S,
+    PARTITIONS,
+    Split,
+    bin_range,
+)
+
+_GROUP_KEYS = {kind: key for key, kind in GROUP_KINDS.items()}
+
+
+def assert_split_valid(
+    split: Split,
+    *,
+    context_bins: int,
+    manifest_provenance: dict | None = None,
+    preproc_fingerprint: str | None = None,
+) -> None:
+    """Raise ValueError if the split could leak or does not match the current data.
+
+    context_bins: the model's context length, in bins of the split's bin width.
+    manifest_provenance / preproc_fingerprint: what to compare against; by default,
+    this code's manifest versions and the fingerprint of configs/preprocess.yaml.
+    """
+    if isinstance(context_bins, bool) or not isinstance(context_bins, int) or context_bins < 1:
+        raise ValueError(f"context_bins must be a positive integer, got {context_bins!r}")
+    _check_versions(split, manifest_provenance, preproc_fingerprint)
+    _check_partitions(split)
+    if split.kind == "within_session":
+        for eid in sorted(set().union(*split.partitions.values())):
+            _check_session_blocks(split, eid, context_bins)
+        return
+    pairs = list(combinations(split.partitions, 2))
+    for a, b in pairs:
+        shared = sorted(set(split.partitions[a]) & set(split.partitions[b]))
+        if shared:
+            raise ValueError(f"session {shared[0]} is in both {a} and {b}")
+    key = _GROUP_KEYS.get(split.kind)
+    if key is None:
+        return
+    for a, b in pairs:
+        values = [{split.sessions[e][key] for e in split.partitions[p]} for p in (a, b)]
+        shared = sorted(values[0] & values[1])
+        if shared:
+            raise ValueError(f"{key} {shared[0]} is in both {a} and {b}")
+
+
+def _check_versions(split: Split, provenance: dict | None, fingerprint: str | None) -> None:
+    expected = manifest_versions() if provenance is None else provenance
+    for key in ("manifest_version", "sources"):
+        if split.manifest.get(key) != expected.get(key):
+            raise ValueError(
+                f"split was built against manifest {key} {split.manifest.get(key)!r}, "
+                f"current is {expected.get(key)!r}; rebuild the split"
+            )
+    if fingerprint is None:
+        fingerprint = load_preproc_config().fingerprint()
+    if split.preproc.get("fingerprint") != fingerprint:
+        raise ValueError(
+            f"split was built for preprocessing fingerprint {split.preproc.get('fingerprint')}, "
+            f"current is {fingerprint}; rebuild the split"
+        )
+
+
+def _check_partitions(split: Split) -> None:
+    if split.kind not in KINDS:
+        raise ValueError(f"unknown split kind {split.kind!r}")
+    unknown = sorted(set(split.partitions) - set(PARTITIONS))
+    if unknown or not {"train", "test"} <= set(split.partitions):
+        raise ValueError(
+            f"partitions {sorted(split.partitions)}; need train and test, " f"and only {PARTITIONS}"
+        )
+    for name, eids in split.partitions.items():
+        if not eids:
+            raise ValueError(f"partition {name} is empty")
+        if len(set(eids)) != len(eids):
+            raise ValueError(f"partition {name} lists a session more than once")
+        missing = sorted(set(eids) - set(split.sessions))
+        if missing:
+            raise ValueError(f"partition {name} lists {missing[0]}, which has no session record")
+
+
+def _check_session_blocks(split: Split, eid: str, context_bins: int) -> None:
+    record = split.sessions[eid]
+    names = [p for p in split.partitions if eid in split.partitions[p]]
+    blocks, trials = record.get("blocks", {}), record.get("trials", {})
+    if set(blocks) != set(names) or set(trials) != set(names):
+        raise ValueError(
+            f"{eid}: blocks {sorted(blocks)} and trials {sorted(trials)} "
+            f"must match its partitions {sorted(names)}"
+        )
+
+    bin_ms = split.preproc["bin_ms"]
+    need = max(context_bins, math.ceil(MIN_GAP_S * 1000 / bin_ms))
+    bins = {p: bin_range(blocks[p], bin_ms) for p in names}
+    for p in names:
+        if blocks[p][1] < blocks[p][0]:
+            raise ValueError(f"{eid}: {p} block {blocks[p]} ends before it starts")
+    for a, b in combinations(names, 2):
+        (a0, a1), (b0, b1) = bins[a], bins[b]
+        if a0 <= b1 and b0 <= a1:
+            raise ValueError(f"{eid}: the {a} and {b} blocks share bins")
+        gap = max(b0 - a1, a0 - b1) - 1
+        if gap < need:
+            raise ValueError(
+                f"{eid}: {gap} bins between the {a} and {b} blocks; the gap must be at least "
+                f"max(context {context_bins}, {MIN_GAP_S} s) = {need} bins"
+            )
+
+    intervals = record["trial_intervals"]
+    seen: dict[int, str] = {}
+    for p in names:
+        start, stop = blocks[p]
+        for i in trials[p]:
+            if isinstance(i, bool) or not isinstance(i, int) or not 0 <= i < len(intervals):
+                raise ValueError(f"{eid}: {p} lists trial {i!r}, not one of its trials")
+            if i in seen:
+                raise ValueError(f"{eid}: trial {i} is in both {seen[i]} and {p}")
+            seen[i] = p
+            t0, t1 = intervals[i]
+            if not start <= t0 <= t1 <= stop:
+                raise ValueError(
+                    f"{eid}: trial {i} [{t0}, {t1}] is in {p} but not wholly inside "
+                    f"its block [{start}, {stop}]"
+                )

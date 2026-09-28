@@ -1,0 +1,269 @@
+"""Train / calibration / test partitions, saved as JSON with a hash.  [R1, R2, R7]
+
+Every partition used for training or evaluation is built here and passed around as a
+`Split`. Models never receive raw session lists. A split records the manifest
+provenance and preprocessing fingerprint it was built against. Its hash covers all of
+its content, so `load_split` refuses an edited or corrupted file, and
+`guards.assert_split_valid` refuses a split built against other data or preprocessing.
+
+Kinds (docs/SPLITS_AND_LEAKAGE.md):
+- held_out_animal / held_out_lab: every session of an animal (lab) is in one partition.
+  Calibration, when requested, is its own set of animals (labs).
+- held_out_session: one session of each animal with >= 2 sessions is test; the rest train.
+- within_session: per session, early trials train and late trials test, as two
+  contiguous time blocks separated by a gap. Trials in the gap belong to neither.
+held_out_region and held_out_config are not built yet.
+
+Random choices use numpy's default_rng with the required seed. The saved file, not
+the seed, is the record: a different numpy could draw differently from the same seed.
+"""
+
+import hashlib
+import json
+import math
+import os
+import tempfile
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, fields
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from neurodecoder.data.manifest import Manifest
+from neurodecoder.preprocess.binning import PreprocConfig
+
+SPLIT_FORMAT_VERSION = 1
+PARTITIONS = ("train", "calibration", "test")
+GROUP_KINDS = {"subject": "held_out_animal", "lab": "held_out_lab"}
+KINDS = (*GROUP_KINDS.values(), "held_out_session", "within_session")
+# Behavioural autocorrelation outlives the neural context, so temporal splits keep at
+# least this much time between train and test whatever the context.
+MIN_GAP_S = 2.0
+
+
+@dataclass(frozen=True)
+class Split:
+    """One partition of sessions (and, within a session, of time and trials).
+
+    partitions: partition name -> sorted eids.
+    sessions: eid -> {"subject", "lab"}; within_session adds "blocks" (partition ->
+      [start_s, stop_s]), "trials" (partition -> row indices into Session.trials) and
+      "trial_intervals" (one [intervals_0, intervals_1] per row of Session.trials).
+    manifest: provenance of the manifest the split was built from.
+    preproc: {"fingerprint", "bin_ms"} of the preprocessing it was built for.
+    """
+
+    kind: str
+    params: dict
+    partitions: dict
+    sessions: dict
+    manifest: dict
+    preproc: dict
+
+    def content(self) -> dict:
+        return {"format_version": SPLIT_FORMAT_VERSION, **asdict(self)}
+
+    @property
+    def hash(self) -> str:
+        canonical = json.dumps(
+            self.content(), sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def bin_range(block: list, bin_ms: int) -> tuple[int, int]:
+    """First and last bin index (inclusive) touched by a [start_s, stop_s] block.
+
+    Same grid as preprocess.binning: bin k covers [k * w, (k + 1) * w).
+    """
+    rate = 1000 // bin_ms
+    return int(np.floor(block[0] * rate)), int(np.floor(block[1] * rate))
+
+
+def _check_seed(seed: int) -> int:
+    if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)):
+        raise ValueError(f"seed must be an integer, got {seed!r}")
+    return int(seed)
+
+
+def _session_meta(manifest: Manifest) -> dict:
+    table = manifest.sessions[["eid", "subject", "lab"]]
+    if table["eid"].duplicated().any():
+        raise ValueError("manifest lists an eid more than once")
+    if table.isna().any().any():
+        raise ValueError("manifest has sessions without a subject or lab")
+    return {
+        str(eid): {"subject": str(subject), "lab": str(lab)}
+        for eid, subject, lab in table.itertuples(index=False)
+    }
+
+
+def _split(kind: str, params: dict, partitions: dict, sessions: dict, manifest, preproc) -> Split:
+    return Split(
+        kind=kind,
+        params=params,
+        partitions={p: sorted(eids) for p, eids in partitions.items()},
+        sessions=sessions,
+        manifest=dict(manifest.provenance),
+        preproc={"fingerprint": preproc.fingerprint(), "bin_ms": preproc.bin_ms},
+    )
+
+
+def held_out_groups(
+    manifest: Manifest,
+    preproc: PreprocConfig,
+    *,
+    by: str,
+    n_test: int,
+    n_calibration: int,
+    seed: int,
+) -> Split:
+    """Hold out whole animals (by="subject") or labs (by="lab").
+
+    The groups are shuffled with `seed`; the first n_test are test, the next
+    n_calibration are calibration, and the rest are train. With n_calibration == 0
+    there is no calibration partition.
+    """
+    if by not in GROUP_KINDS:
+        raise ValueError(f"by must be one of {sorted(GROUP_KINDS)}, got {by!r}")
+    seed = _check_seed(seed)
+    meta = _session_meta(manifest)
+    groups = sorted({m[by] for m in meta.values()})
+    if n_test < 1 or n_calibration < 0 or n_test + n_calibration >= len(groups):
+        raise ValueError(
+            f"{n_test} test + {n_calibration} calibration groups leave no {by} for training "
+            f"(there are {len(groups)} groups)"
+        )
+    shuffled = [groups[i] for i in np.random.default_rng(seed).permutation(len(groups))]
+    assigned = {g: "test" for g in shuffled[:n_test]}
+    assigned |= {g: "calibration" for g in shuffled[n_test : n_test + n_calibration]}
+
+    partitions = {p: [] for p in PARTITIONS if p != "calibration" or n_calibration}
+    for eid, m in meta.items():
+        partitions[assigned.get(m[by], "train")].append(eid)
+    params = {"n_test": int(n_test), "n_calibration": int(n_calibration), "seed": seed}
+    return _split(GROUP_KINDS[by], params, partitions, meta, manifest, preproc)
+
+
+def held_out_session(manifest: Manifest, preproc: PreprocConfig, *, seed: int) -> Split:
+    """Test one session, drawn with `seed`, of every animal that has at least two."""
+    seed = _check_seed(seed)
+    meta = _session_meta(manifest)
+    by_subject: dict[str, list[str]] = {}
+    for eid in sorted(meta):
+        by_subject.setdefault(meta[eid]["subject"], []).append(eid)
+
+    rng = np.random.default_rng(seed)
+    test = [
+        eids[rng.integers(len(eids))] for _, eids in sorted(by_subject.items()) if len(eids) > 1
+    ]
+    if not test:
+        raise ValueError("no animal has two sessions, so no session can be held out")
+    partitions = {"train": set(meta) - set(test), "test": test}
+    return _split("held_out_session", {"seed": seed}, partitions, meta, manifest, preproc)
+
+
+def _check_intervals(eid: str, intervals: np.ndarray) -> None:
+    if not np.all(np.isfinite(intervals)):
+        raise ValueError(f"{eid}: trial intervals must be finite")
+    if np.any(intervals[:, 1] < intervals[:, 0]):
+        raise ValueError(f"{eid}: a trial ends before it starts")
+    if np.any(intervals[1:, 0] < intervals[:-1, 1]):
+        raise ValueError(f"{eid}: trials must be in time order and must not overlap")
+
+
+def within_session(
+    manifest: Manifest,
+    trials: Mapping[str, pd.DataFrame],
+    preproc: PreprocConfig,
+    *,
+    train_fraction: float,
+    gap_s: float,
+) -> Split:
+    """Split each session's trials in time: the first train_fraction train, the rest test.
+
+    trials: eid -> that session's Session.trials (row i is trial i). The train block runs
+    from the first trial's start to the last train trial's end. Test trials are the
+    later ones that start at least gap_s after that, measured in whole bins; any trial
+    in between is in neither partition. gap_s must be >= 2 s, and also covers the
+    model's context; `assert_split_valid` checks that.
+    """
+    if gap_s < MIN_GAP_S:
+        raise ValueError(f"gap_s must be at least {MIN_GAP_S} s, got {gap_s}")
+    if not 0 < train_fraction < 1:
+        raise ValueError(f"train_fraction must be in (0, 1), got {train_fraction}")
+    meta = _session_meta(manifest)
+    unknown = sorted(set(trials) - set(meta))
+    if unknown or not trials:
+        raise ValueError(f"trials must be given for manifest sessions; unknown: {unknown}")
+
+    rate = 1000 // preproc.bin_ms
+    gap_bins = math.ceil(gap_s * rate)
+    sessions = {}
+    for eid in sorted(trials):
+        intervals = trials[eid][["intervals_0", "intervals_1"]].to_numpy(np.float64)
+        _check_intervals(eid, intervals)
+        n_train = round(train_fraction * len(intervals))
+        if not 1 <= n_train < len(intervals):
+            raise ValueError(f"{eid}: {len(intervals)} trials cannot be split at {train_fraction}")
+        train_stop = intervals[n_train - 1, 1]
+        first_test_bin = int(np.floor(train_stop * rate)) + 1 + gap_bins
+        start_bins = np.floor(intervals[:, 0] * rate).astype(np.int64)
+        first_test = n_train + int(np.searchsorted(start_bins[n_train:], first_test_bin))
+        if first_test == len(intervals):
+            raise ValueError(f"{eid}: no trial starts after the {gap_s} s gap")
+        sessions[eid] = {
+            **meta[eid],
+            "blocks": {
+                "train": [float(intervals[0, 0]), float(train_stop)],
+                "test": [float(intervals[first_test, 0]), float(intervals[-1, 1])],
+            },
+            "trials": {
+                "train": list(range(n_train)),
+                "test": list(range(first_test, len(intervals))),
+            },
+            "trial_intervals": intervals.tolist(),
+        }
+    partitions = {"train": list(sessions), "test": list(sessions)}
+    params = {"train_fraction": float(train_fraction), "gap_s": float(gap_s)}
+    return _split("within_session", params, partitions, sessions, manifest, preproc)
+
+
+def save_split(split: Split, path: str | os.PathLike) -> Path:
+    """Write the split and its hash. An existing file is never replaced by a different split."""
+    path = Path(path)
+    content = {**split.content(), "hash": split.hash}
+    text = json.dumps(content, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    if path.exists():
+        if path.read_text() == text:
+            return path
+        raise FileExistsError(f"{path} already holds a different split; splits are not replaced")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-split-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    return path
+
+
+def load_split(path: str | os.PathLike) -> Split:
+    """Read a split file, refusing it if its content no longer matches its hash."""
+    raw = json.loads(Path(path).read_text())
+    stored = raw.pop("hash", None)
+    version = raw.pop("format_version", None)
+    if version != SPLIT_FORMAT_VERSION:
+        raise ValueError(f"{path}: split format {version}, this code reads {SPLIT_FORMAT_VERSION}")
+    expected = {f.name for f in fields(Split)}
+    if set(raw) != expected:
+        raise ValueError(f"{path}: split fields {sorted(raw)}, expected {sorted(expected)}")
+    split = Split(**raw)
+    if split.hash != stored:
+        raise ValueError(
+            f"{path}: content does not match its hash; the file was edited or corrupted"
+        )
+    return split
