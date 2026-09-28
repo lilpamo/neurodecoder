@@ -6,6 +6,57 @@ first.
 
 ---
 
+### 2026-09-28 — Normalisation (`neurodecoder/preprocess/normalize.py`)
+
+**Decision (option chosen by the user):** per-unit statistics where the units
+have training data, pooled statistics otherwise. `fit_normalizer(split, binned,
+preproc)` takes a split, never a bare session, and reads only training data: the
+train block of each `within_session` session, or the sessions of the train
+partition. Calibration and test data are never read.
+
+The mode is set **per split kind**:
+- **`within_session` → `per_unit`:** each unit's mean and std over its train
+  block.
+- **Every cross-session kind → `pooled`:** one mean and std over all units and
+  bins of the train partition, applied to every unit, train and test alike.
+
+The per-split-kind mode is how the user's chosen option reads ("the
+within-session ceiling is normalised more finely than cross-session rows").
+Its reason: normalising training units per unit and unseen test units pooled
+would itself shift the inputs between train and test.
+
+- **std floor = √(min_firing_rate_hz · bin_s)**, the std of a Poisson unit at
+  the QC minimum rate (0.045 at 0.1 Hz, 20 ms). It's derived from existing
+  config, so there's no new tunable. Without it a unit silent in training would
+  divide by zero.
+- **Sums are exact int64 sums,** so the statistics don't depend on session
+  order. The `Normalizer` is a hashed dataclass that serialises to JSON for the
+  model artifact (R3). `from_dict` refuses edited content.
+- **`transform` returns `(n_units, n_bins)` float32** (291 MB for
+  `d23a44ef`). It refuses binned data with another fingerprint, and in
+  `per_unit` mode a session or unit set it wasn't fit on. `inverse_transform`
+  undoes it.
+
+**Verified on `d23a44ef`** (`within_session`, 0.8, 2 s):
+- Counts round-trip through `transform` and `inverse_transform` exactly after
+  rounding. This is half of Phase 2's success criterion "round-trip a session
+  to tensors and back"; the windows module is the other half.
+- Fit takes 0.04 s and transform 0.22 s.
+
+**Finding, not acted on: within-session non-stationarity.**
+- **9 of 397 units hit the std floor.** They are nearly silent in the train
+  block (≤ 0.07 Hz) but pass QC's 0.1 Hz. QC uses the release's whole-recording
+  firing rate, which includes the post-task period.
+- **Some fire mostly after the task.** `probe01_953` spikes only from 2,637 s,
+  and the trials end at 2,330 s. `probe01_1157` averages 9 Hz overall but
+  0.01–0.18 Hz during trials.
+- **Some appear partway through,** probably from drift. `probe00_514` is at
+  0.011 Hz in train and 2.07 Hz in test, giving z-scores up to 179.
+- **57 units have a test-block mean z beyond ±0.5.**
+
+A task-period firing-rate criterion would change the signed-off QC, so it's
+left for the user.
+
 ### 2026-09-28 — Held-out region split, and `iblatlas` as a dependency (`neurodecoder/splits/registry.py`)
 
 **Decision:** `held_out_region(manifest, units, preproc, region=R)` follows the
