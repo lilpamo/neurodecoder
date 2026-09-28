@@ -6,6 +6,46 @@ first.
 
 ---
 
+### 2026-09-28 — Phase 1 success check (`neurodecoder/cli/phase1_check.py`): passed
+
+**Decision:** ROADMAP Phase 1's success criterion ("`load_session` works for
+50 sessions across ≥10 subjects and ≥3 labs, from cache, in under 5 s each")
+is checked by `python -m neurodecoder.cli.phase1_check`:
+1. It builds the manifest and picks 50 sessions deterministically, with no
+   randomness (R7): each subject's earliest session, taking labs in turn.
+2. It loads each through `load_session(eid, "bwm")`, which fills the cache,
+   then times a second, cached read.
+3. It checks each session's unit and trial counts against the manifest.
+4. It writes `runs/<UTC time>_phase1_check/report.json` with the git SHA and
+   a dirty flag (§7), and exits non-zero on any failure.
+
+The manifest needs the `bwm_behavior` folder, so `configs/data.yaml` gained
+a `bwm_behavior` key, with `DataConfig.bwm_behavior_root` in `load.py`.
+
+**Result, run 2026-09-28 (`runs/20260928T071223Z_phase1_check/`): PASSED.**
+- 50 sessions from **50 subjects across all 12 labs**.
+- **Cached reads: median 0.06 s, p95 0.25 s, max 0.37 s**, against the 5 s
+  budget.
+- First loads from source, including the cache write: median 0.50 s, max
+  5.76 s (the largest session, 421 units).
+- **All 50 sessions' unit and trial counts match the manifest.** Sessions
+  range from 12 to 456 good units (median 145) and 402 to 1,440 trials.
+- Cached read time rises with session size (correlation 0.81 with unit
+  count), as real I/O should.
+- Whole run 48 s; cache 3.1 GB for the 50 sessions.
+
+**Caveats:**
+- The cached reads came right after the writes, so the OS file cache was
+  likely warm; clearing it needs admin rights. Cold reads will be slower,
+  but the slowest warm read has a 13× margin.
+- This run recorded `git_dirty: true`, because the check module wasn't
+  committed yet (base commit `2ef7e03`). Rerun after committing for a report
+  tied to committed code.
+
+**What Phase 1 still lacks, even though this criterion is met:** the ONE
+backend, behaviour in the BWM backend, and a three-way backend agreement
+test. BWM and NWB agreement is shown on `d23a44ef`.
+
 ### 2026-09-28 — Session manifest (`neurodecoder/data/manifest.py`), and what BWM's "good units" are
 
 **Decision:** `build_manifest(ephys_root, behaviour_root)` builds two tables
