@@ -1,0 +1,5 @@
+# Preprocessing (Phase 2). Changing any value changes the preprocessed data and its
+# fingerprint (R6); never change it to improve a metric. Unit QC lives in qc.yaml.
+
+# Bin width in whole milliseconds; must divide 1000. 20 ms matches NEDS.
+bin_ms: 20

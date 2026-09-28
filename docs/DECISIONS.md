@@ -6,6 +6,42 @@ first.
 
 ---
 
+### 2026-09-28 — Binning and `PREPROC_VERSION` (`neurodecoder/preprocess/binning.py`)
+
+**Decision:** `preprocess_session(session, config)` applies unit QC and then
+bins spikes into `(n_units, n_bins)` `uint16` counts. `bin_spikes` bins
+without QC, and its result carries no fingerprint.
+
+- **The grid is anchored at t = 0 on the session clock:** bin *k* covers
+  `[k·w, (k+1)·w)`, and `first_bin = floor(t_start · rate)`. Backends whose
+  time bounds differ slightly still line up bin by bin (BWM and NWB differ by
+  one bin at the end on `d23a44ef`). A spike exactly on an edge goes to the
+  upper bin.
+- **The bin width is an integer number of ms that divides 1000**
+  (`configs/preprocess.yaml`, default **20 ms**, matching NEDS; 10 and 50
+  also valid). A spike's bin is `floor(t · rate)` with an integer rate, which
+  avoids `floor(t / w)` misplacing spikes through float error
+  (`0.06 / 0.02 = 2.999…`).
+- **Counts are `uint16`,** and a bin over 65,535 raises instead of wrapping.
+  The real maximum on `d23a44ef` is 19 per 20 ms bin.
+- **`PREPROC_VERSION = 1`** is a code version, bumped by hand whenever
+  binning (or anything it calls) gives different output for the same input.
+  **`PreprocConfig.fingerprint()`** is the sha256 of `PREPROC_VERSION`, the
+  bin width and the unit-QC hash. It's what caches and the split registry
+  will record (R6): changing any threshold, the bin width or the code version
+  changes it.
+
+**Verified on `d23a44ef` (20 ms):**
+- `(397, 183,448)` counts, 146 MB, QC plus binning in 0.43 s.
+- Each unit's counts sum to its spike count.
+- **ONE and NWB bin byte-identically** (same spike times).
+- **BWM differs from NWB in 0.248% of spikes** (64,293 of 25,887,688), each
+  moved by one bin. BWM stores 100 µs ticks, so only spikes within 50 µs of
+  an edge can move; the expected fraction for evenly spread rounding is
+  50 µs / 20 ms = 0.25%. The test enforces the 0.5% worst case.
+- The same input gives byte-identical counts and the same fingerprint (the
+  roadmap's `test_binning_determinism`).
+
 ### 2026-09-28 — Phase 2 order, and unit QC (`neurodecoder/qc/units.py`, `configs/qc.yaml`)
 
 **Signed off by the user before any Phase 2 code (CLAUDE.md §10):**
