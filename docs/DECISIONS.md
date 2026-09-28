@@ -6,6 +6,58 @@ first.
 
 ---
 
+### 2026-09-28 — Held-out region split, and `iblatlas` as a dependency (`neurodecoder/splits/registry.py`)
+
+**Decision:** `held_out_region(manifest, units, preproc, region=R)` follows the
+split doc's stricter definition, with one tightening. `units` is the BWM
+release's `metadata/units.parquet`, the same table the BWM backend loads
+sessions from. Only units that pass `preproc.qc` count.
+- **Test:** at least 20% of the session's QC-passing units have Beryl region R.
+  The denominator includes units with no Beryl region (fibre tracts, ventricles,
+  parent-only labels).
+- **Train:** no QC-passing unit in R, **and none that could be in R.** A unit
+  could be in R when it has no Beryl region and its Allen label contains R or
+  lies inside it: `STR` for CP, `TH` for PO, `MB` for MRN.
+- **Everything else is dropped.** The split still records every session's
+  counts (`n_units`, `n_in_region`, `n_possibly_in_region`), so the file shows
+  why a session is out. The guard re-checks both rules from those counts.
+- **R must be a Beryl region.** The split records R, the 20% threshold and the
+  `iblatlas` version.
+- **No calibration partition,** as for `held_out_session`.
+
+**Why the tightening:** 10,059 of the 75,395 release units (13%) have no Beryl
+region. Most are fibre tracts, but many carry only a parent label: `MB` 1,465,
+`P` 751, `STR` 526, `TH` 310. Under the literal "zero units in R" rule such a
+session trains while possibly holding units from R. Excluding them costs
+training sessions:
+- 30 for CP (388 → 358);
+- 50 for MRN (349 → 299);
+- 107 for APN (408 → 301);
+- 42 for PO (409 → 367);
+- none for cortical regions such as MOp, MOs and VISp.
+
+**Why `iblatlas`:** the containment test needs the Allen hierarchy. `iblatlas`
+is IBL's atlas package, a dependency of `ibllib` (already in the Fixed stack),
+though `ibllib` itself isn't installed here. 1.2.1 is the version already used
+in NEDS's environment. It adds only `pynrrd` beyond the Fixed stack, plus
+matplotlib (Fixed, never installed until now). Its Beryl mapping agrees with
+the release's `beryl_acronym` for all 75,395 units.
+
+**Verified on the full manifest** (every Beryl region, 0.4 s each, all pass the
+guard): 144 of 266 regions have a test set.
+- **≥ 20 test sessions: 4 regions.** CP 43 (358 train), MRN 33, APN 26, PO 23.
+- **≥ 10: 16 regions.**
+- **≥ 5: 42 regions.**
+
+**Test animals are not kept out of training.** For CP, 36 of the 43 test
+sessions come from animals with other sessions in train. The split doc doesn't
+ask for animal disjointness. Without it, a held-out-region result measures
+region transfer to animals the model has already seen, so it can't be read as
+cross-animal. Requiring disjointness would shrink test sets further.
+
+**Signed off by the user (2026-09-28):** both the parent-label tightening and
+leaving animals shared between train and test, as described above.
+
 ### 2026-09-28 — Split registry and guards (`neurodecoder/splits/`)
 
 **Decision:** four of the six split kinds in `docs/SPLITS_AND_LEAKAGE.md` are

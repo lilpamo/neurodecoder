@@ -17,6 +17,7 @@ dependencies = [
     "numcodecs",
     "ONE-api",
     "ibllib",
+    "iblatlas",
     "PyYAML",
     "pytest",
     "matplotlib",
