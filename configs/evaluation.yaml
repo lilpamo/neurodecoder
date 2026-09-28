@@ -1,0 +1,6 @@
+# Evaluation (Phase 3). Changing a value changes reported metrics; never change it to
+# improve one. See docs/DECISIONS.md.
+
+# Expected calibration error: top-label (the predicted class's confidence) in
+# equal-width bins over [0, 1]. 10 bins is netcal's default, which Phase 6 uses.
+ece_bins: 10

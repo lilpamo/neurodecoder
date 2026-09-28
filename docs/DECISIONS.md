@@ -6,6 +6,36 @@ first.
 
 ---
 
+### 2026-09-28 — Decoding metrics (`neurodecoder/evaluation/metrics.py`, `configs/evaluation.yaml`)
+
+**Decision:** metrics are computed **per session**, and summarised only as a
+distribution across sessions: median, quartiles, range and the number of
+sessions where the metric is defined. Nothing pools samples across sessions.
+`test_no_pooled_r2_across_sessions` shows why: a decoder that only knows each
+session's mean scores R² > 0.9 pooled, and ≈ 0 in every session.
+
+- **Classification (binary):**
+  - balanced accuracy, AUROC, F1, log loss and ECE, computed from
+    p = P(class 1);
+  - the hard prediction is class 1 when p ≥ 0.5, the plain argmax, so there's
+    no threshold to tune.
+- **ECE is top-label:** the predicted class's confidence, in 10 equal-width bins
+  `[k/10, (k+1)/10)` (the last closed). 10 is netcal's default, which Phase 6
+  will use; the bin count is `configs/evaluation.yaml: ece_bins`.
+- **Regression:** R² (against the session's own mean), Pearson correlation, MAE
+  and RMSE.
+- **Undefined is NaN, never an error or a default:**
+  - AUROC and balanced accuracy when a session has one class;
+  - R² and correlation for a constant target;
+  - correlation for a constant prediction;
+  - F1 when there are no positives at all.
+
+  Inputs with NaN are refused, so undefined samples (e.g. unlabelled
+  `movement_state` bins) must be dropped explicitly first.
+- **scikit-learn** (in the Fixed stack and `pyproject.toml`, but never installed
+  in the local venv until now) supplies the standard metrics. Tests check each
+  against it.
+
 ### 2026-09-28 — Targets (`neurodecoder/targets/`, `configs/targets.yaml`)
 
 **Decision (the user chose each option below before any code):** five targets,
