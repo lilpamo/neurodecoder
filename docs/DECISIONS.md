@@ -6,6 +6,67 @@ first.
 
 ---
 
+### 2026-09-28 — BWM compressed backend (`neurodecoder/data/backends/bwm_compressed.py`), and `numcodecs`
+
+**Decision:** `load_session_bwm(eid, root)` reads one session from an
+extracted `bwm_ephys` release into a `Session`. It adds **`numcodecs`**
+(0.16.5; requires only `numpy` and `typing_extensions`) as a dependency,
+because the spike shards are `numcodecs` Blosc (zstd, shuffle) arrays,
+exactly as ibl-ai-agent writes them.
+
+- **The release version is pinned to `1.2.1`.** `manifest.json` must say
+  `bwm_ephys` `1.2.1`, or the backend raises, for the same reason the DANDI
+  and ONE revisions are pinned.
+- **Spike decoding follows ibl-ai-agent's own reader:** times =
+  (`cumsum(delta ticks)` + `time_origin_ticks`) × 100 µs. Shards whose
+  `format`, `time_encoding` or `cluster_encoding` differ from the known
+  values are rejected. Each shard's per-unit counts must equal its per-spike
+  cluster assignments, and they must match the units table's cluster IDs
+  and `spike_count`, or the backend raises.
+- **Spike-time error:** the encoder rounds (`np.rint`) to 100 µs ticks. The
+  shards in this release record origin 0, from an older encoder, so there's
+  a single rounding and the error is at most **50 µs**. ibl-ai-agent's
+  current encoder rounds the first spike separately, which would allow up
+  to 100 µs; that doesn't apply to these shards. Measured on `d23a44ef`
+  against NWB: max 50.00 µs, over all 398 units.
+- **Unit IDs are `{probe_name}_{cluster_id}`**, the same IDs the NWB backend
+  produces, so the two can be compared directly. Units are good units only
+  (`label == 1`), and `x/y/z` are BWM's bregma-relative meters, which makes
+  BWM the canonical source for coordinates.
+- **Trials come from the Brain Wide Map paper's frozen trials table**
+  (`provenance.yaml`: `trials_table: bwm_tables/trials.pqt`). All 13
+  canonical fields are present, including `stimOff_times`, which
+  ibl-ai-agent's docs don't list. `bwm_include` (290 of 410 trials in
+  `d23a44ef`) is kept as an extra column; filtering is a later choice.
+- **Behaviour is declared missing:** it lives in the separate
+  `bwm_behavior` dataset, which isn't loaded yet.
+
+**Cross-backend results against the NWB backend on `d23a44ef`:**
+- Exactly the NWB units with `label == 1.0`, with the same IDs.
+- Every unit's spike count is identical, and spike times are within 50 µs.
+- 12 of 13 trial fields are identical.
+- **`firstMovement_times` differs, and structurally.** Both sources put
+  movement onsets on a 1 kHz grid, offset by a constant phase (BWM 0.12402 ms;
+  ONE's `2025-03-03` revision, which NWB matches, 0.42318 ms). Every
+  difference is that phase plus whole samples (−2 in 4 trials, −1 in 290,
+  0 in 115, +1 in 1): 405 of 410 trials differ by under 1 ms, and the worst
+  is 1.70084 ms. So ONE's 2025-03-03 revision re-extracted movement onsets on
+  a shifted resampling grid. **Phase 2 consequence:** a movement-onset target
+  can move by up to ~2 ms, occasionally into the next 20 ms bin, depending on
+  which backend it's built from. Pick one source for that target and record
+  the choice (Phase 2 ADR).
+
+**Performance:** 3.5 s per session. A stable `argsort` on the int64 unit
+indices took 14.8 of an initial 16.5 s. Casting to `uint16` (at most 459
+good units per insertion in BWM) lets NumPy use its linear-time radix sort,
+with an identical order. It falls back to int64 if an insertion ever has
+more than 65,535 units.
+
+**Alternatives considered:** Using ibl-ai-agent's package as a dependency
+(not on PyPI, and it brings their whole tool stack); `blosc`/`blosc2` instead
+of `numcodecs` (the shards are written by `numcodecs`, so its decoder is the
+one guaranteed to match).
+
 ### 2026-09-27 — Add `remfile` to stream NWB files from DANDI
 
 **Decision:** Add `remfile` (0.1.15; depends only on `h5py`, `numpy`,
