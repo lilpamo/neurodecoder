@@ -7,12 +7,12 @@ from pathlib import Path
 
 import yaml
 
-from neurodecoder.data.backends import bwm_compressed, dandi_nwb
+from neurodecoder.data.backends import bwm_compressed, dandi_nwb, one_backend
 from neurodecoder.data.cache import SessionCache
 from neurodecoder.data.session import Session
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "data.yaml"
-_CONFIG_KEYS = {"data_root", "bwm_ephys", "bwm_behavior", "nwb_000409", "cache"}
+_CONFIG_KEYS = {"data_root", "bwm_ephys", "bwm_behavior", "nwb_000409", "one_cache", "cache"}
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,7 @@ class DataConfig:
     bwm_ephys_root: Path
     bwm_behavior_root: Path
     nwb_dir: Path
+    one_cache_root: Path
     cache_root: Path
 
 
@@ -36,6 +37,7 @@ def load_data_config(path: str | os.PathLike = DEFAULT_CONFIG) -> DataConfig:
         bwm_ephys_root=root / raw["bwm_ephys"],
         bwm_behavior_root=root / raw["bwm_behavior"],
         nwb_dir=root / raw["nwb_000409"],
+        one_cache_root=root / raw["one_cache"],
         cache_root=root / raw["cache"],
     )
 
@@ -68,6 +70,10 @@ def _load_nwb(eid: str, config: DataConfig) -> Session:
     return dandi_nwb.load_session_nwb(nwb_source(eid, config))
 
 
+def _load_one(eid: str, config: DataConfig) -> Session:
+    return one_backend.load_session_one(eid, one_backend.make_one(config.one_cache_root))
+
+
 BACKENDS = {
     "bwm": Backend(
         source={"dataset": bwm_compressed.DATASET_NAME, "version": bwm_compressed.DATASET_VERSION},
@@ -78,6 +84,15 @@ BACKENDS = {
         source={"dandiset": dandi_nwb.DANDISET, "version": dandi_nwb.DANDISET_VERSION},
         loader_version=dandi_nwb.LOADER_VERSION,
         load=_load_nwb,
+    ),
+    "one": Backend(
+        source={
+            "database": one_backend.PUBLIC_ALYX,
+            "sorter_revision": one_backend.SORTER_REVISION,
+            "trials_revision": one_backend.TRIALS_REVISION,
+        },
+        loader_version=one_backend.LOADER_VERSION,
+        load=_load_one,
     ),
 }
 

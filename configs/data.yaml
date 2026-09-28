@@ -4,4 +4,5 @@ data_root: ~/data/neurodecoder
 bwm_ephys: bwm_compressed/bwm_ephys/1.2.1
 bwm_behavior: bwm_compressed/bwm_behavior/2.0.0
 nwb_000409: dandi/000409
+one_cache: one
 cache: cache
