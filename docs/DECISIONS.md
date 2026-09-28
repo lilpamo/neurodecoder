@@ -6,6 +6,67 @@ first.
 
 ---
 
+### 2026-09-28 — Session cache (`neurodecoder/data/cache.py`)
+
+**Decision:** `SessionCache(root)` stores loaded `Session`s on disk, one
+directory per key. `get_or_load(key_parts, loader)` returns a cached session,
+or runs the loader and stores its result.
+
+- **Keys are content addresses.** The key is the sha256 of the key parts plus
+  `CACHE_FORMAT_VERSION`, independent of dict order. The required parts are
+  `eid`, `backend`, `source` (the pinned data version, e.g. BWM `1.2.1` or
+  DANDI `000409@0.260309.1324`) and `loader_version`. Changing any of them
+  makes a new entry, so a stale session can't be served after a data or
+  loader change. Entries live at `root/<first 2 hex chars>/<sha256>`.
+- **Where ROADMAP's `(eid, PREPROC_VERSION, config_hash)` fits:** Phase 1
+  caches raw sessions, with no preprocessing, so there's no
+  `PREPROC_VERSION` yet. When Phase 2 caches binned tensors it adds
+  `PREPROC_VERSION` and the config hash as further key parts. The key scheme
+  already accepts extra parts.
+- **Writes are atomic.** An entry is written to a `.tmp-*` directory next to
+  its final location and renamed into place, and a failed write deletes the
+  temporary directory. An entry exists only if its `meta.json` does, so a
+  crash can never leave a half-written entry that later reads as valid.
+- **No pickle.** Spikes are one flat `float64` `.npy` plus per-unit offsets.
+  Behaviour series are `.npy` files, loaded with `allow_pickle=False`.
+  Units and trials are parquet, and `meta.json` holds the eid, time bounds,
+  unit and behaviour order, channel names, capabilities and the key parts.
+  Pickle is fast, but it isn't safe to load and is fragile across versions.
+- **Loaded entries are re-validated,** because every `Session` checks itself
+  when built.
+- **`loader_version` comes from the caller.** The cache doesn't import any
+  backend; the planned `load_session(eid, backend=…)` entry point will
+  supply each backend's loader version. Bump it whenever a backend's mapping
+  changes, just as R6 bumps `PREPROC_VERSION`.
+
+**Verified:** 12 tests cover:
+- round trips that match in every field and dtype, on a fixture with text
+  columns, float32, booleans, NaNs, a named multi-channel series and a unit
+  with no spikes;
+- the real BWM and NWB `d23a44ef` sessions round-tripping exactly;
+- key determinism and required parts;
+- a mid-write failure leaving no entry and no temporary directory;
+- an entry without `meta.json` counting as a miss;
+- a loader returning the wrong eid being rejected.
+
+**Measured on `d23a44ef`:**
+
+| Backend | From source | Cache write | **Cache read** | Entry size |
+|---|---|---|---|---|
+| BWM compressed | 3.4 s | 0.2 s | **0.2 s** | 198 MB |
+| DANDI NWB (local) | 5.9 s | 0.6 s | **0.9 s** | 687 MB |
+
+Both are well under ROADMAP Phase 1's 5 s target. A streamed NWB session
+(~20 min) drops to 0.9 s after the first load. Disk cost is roughly 10 GB
+per 50 BWM sessions or 34 GB per 50 NWB sessions: NWB includes every cluster
+and the video signals. Nothing is compressed, because read speed is the
+point. Compression is the lever if disk becomes the constraint.
+
+**Alternatives considered:** pickle (unsafe to load, fragile); HDF5 (would
+work, but parquet keeps pandas dtypes and index names without custom code);
+hashing the backend's source code into the key (automatic, but any comment
+edit would invalidate everything, including 20-minute streamed sessions).
+
 ### 2026-09-28 — BWM compressed backend (`neurodecoder/data/backends/bwm_compressed.py`), and `numcodecs`
 
 **Decision:** `load_session_bwm(eid, root)` reads one session from an
