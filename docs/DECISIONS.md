@@ -6,6 +6,94 @@ first.
 
 ---
 
+### 2026-09-28 — Unit QC uses the task-period firing rate (`PREPROC_VERSION` 2)
+
+**Decision (signed off by the user on the evidence below):** unit QC's 0.1 Hz
+floor now applies to each unit's firing rate during the task: spikes from the
+first trial's `intervals_0` to the last trial's `intervals_1`, both included,
+over that time. `min_label` (1.0) and `exclude_regions` (void, root) are
+unchanged. The release's `firing_rate` (spike count over the whole recording,
+first spike to last) stays in the units table as a reported column only.
+`PREPROC_VERSION` goes to 2, so every earlier fingerprint, and any split built
+against one, is refused.
+
+**Why:** the normalisation work found units that pass the old floor but are
+nearly silent during trials. Recordings run before and after the task (the task
+is a median 70% of the recording, 28–111 min), and some units fire almost only
+then.
+
+**Evidence** (all 75,395 good units in `bwm_ephys` 1.2.1; measured in 63 s):
+
+| | Whole-recording rule (v1) | Task-period rule (v2) |
+|---|---|---|
+| Units removed | 83 | 1,402 |
+| Pass both / only v1 / only v2 / neither | 73,964 / 1,348 / 29 / 54 | |
+| Per-session loss, 50th / 90th / 95th / max (share of good units) | | 1.0% / 4.4% / 6.1% / 34.6% |
+| Sessions losing 0 / < 1% / 1–5% / 5–10% / 10–25% / > 25% | | 154 / 231 / 193 / 24 / 10 / 1 |
+| QC-passing units per session, 10th / 25th / 50th / 75th / 90th | 48 / 91 / 141 / 217.5 / 304.4 | 46.8 / 89.5 / 138 / 213 / 296.2 |
+
+- A typical unit's two rates agree: the median task/whole ratio is 1.00
+  (10th–90th percentile 0.63–1.33).
+- **15 sessions lose more than 25% or end with fewer than 20 units.** 14 of
+  them already had fewer than 20 under v1, and v2 removes at most one unit from
+  each.
+- **The outlier is `0cc486c3` (ibl_witten_29, wittenlab), 131 → 87 units.** Its
+  46 lost units fire at a median 0.72 Hz over the recording, but only 0.1% of
+  their spikes fall inside the task (53–2,870 s of a 0–4,400 s recording).
+- **On `d23a44ef`, 397 → 390 units, identical across the BWM, NWB and ONE
+  backends.** `probe00_27` (0.0965 Hz whole-recording, 0.0013 Hz in the task)
+  was already out. The new rule removes 6 of the 9 near-silent units from
+  "Normalisation" plus `probe01_280`. (The chat report said 7 of 9; it is 6.)
+
+**Where the rates come from:**
+- **Loaded sessions:** `apply_unit_qc` computes the rates from the session's own
+  spikes and trials, and keeps them as a `task_firing_rate` column. No backend
+  or session cache changes.
+- **Release-wide builders** (`held_out_region`, `held_out_config`) must not load
+  sessions, so they read a precomputed table (location chosen by the user):
+  - it lives at `<data_root>/derived/bwm_ephys-1.2.1/task_rates-v1.parquet`
+    (1.3 MB), with `task_rates-v1.provenance.json` beside it;
+  - it's built once by `python -m neurodecoder.cli.build_task_rates` (54 s,
+    6 processes, decoding every spike shard);
+  - `load_task_rates` refuses a table whose provenance (release name and
+    version, `TASK_RATES_VERSION`, unit count) doesn't match;
+  - `release_units` joins it onto `units.parquet` and refuses mismatched units.
+  After the join, a split build takes about as long as before (0.06 s).
+- **Both paths use the same definition.** Both call `qc.units.task_period` and
+  `in_task`, and the table uses the BWM backend's shard decoder. On `d23a44ef`
+  the table and the session path agree exactly for all 398 units (tested).
+
+**Caches and splits:** nothing on disk depended on preprocessing. The session
+cache is keyed on backend, source and loader version, and holds pre-QC
+sessions, so it stays valid. No split files had been saved.
+
+**`held_out_region`, rebuilt for all 266 regions:**
+- **The four regions with ≥ 20 test sessions are unchanged:** CP 43 / 358 (and
+  still 30 parent-label sessions), MRN 33, APN 26, PO 23.
+- **13 regions change test size by one or two sessions.** Examples: CA1 14 → 15,
+  PRNr 13 → 12, PRM 5 → 3. PRP and SPIV lose their only test session; PC5 gains
+  one.
+- **Regions with a test set:** 144 → 143. With ≥ 10 test sessions: 16 → 16.
+  With ≥ 5: 42 → 41.
+- **Training sets:** among the 142 regions with a test set under both rules, 22
+  gain one training session and one loses one.
+
+**Tests whose hardcoded counts this rule changes:**
+- `test_unit_qc::test_real_bwm_floor…`: 83 → 1,402 removed.
+- `test_unit_qc::test_real_three_backends…`: 397 → 390.
+- `test_binning::test_real_round_trip…`: 397 → 390.
+
+The CP counts in `test_region_split` don't change. Fixtures changed only to
+give QC a `task_firing_rate` or a real task period (`test_unit_qc`,
+`test_binning`, `test_region_split`).
+
+**Known and not acted on: within-session drift.** Units that appear or vanish
+partway through the task still pass. `probe00_514` on `d23a44ef` fires at 0.011
+Hz in the `within_session` train block and 2.07 Hz in the test block (task rate
+0.66 Hz), giving z-scores up to 179. 57 of its session's units have a test-block
+mean z beyond ±0.5. A per-block rate criterion would tie QC to a split, so drift
+is logged here rather than filtered.
+
 ### 2026-09-28 — Windows (`neurodecoder/preprocess/windows.py`)
 
 **Decision:** `window_plan(split, context_bins=…, stride_bins=…)` runs
