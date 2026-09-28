@@ -1,0 +1,10 @@
+# Behavioural targets (Phase 2). Changing any value changes the targets and their
+# fingerprint; never change it to improve a metric (R6). See docs/DECISIONS.md.
+
+# Trial-level decoding windows, from the Brain Wide Map paper: seconds relative to a
+# trials event. Each window must be a whole number of bins.
+windows:
+  # Pre-stimulus, so activity carrying the upcoming choice can't stand in for block.
+  block: {anchor: stimOn_times, start_s: -0.4, stop_s: -0.1}
+  # The 100 ms before the first wheel movement.
+  choice: {anchor: firstMovement_times, start_s: -0.1, stop_s: 0.0}
