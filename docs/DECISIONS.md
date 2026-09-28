@@ -6,6 +6,43 @@ first.
 
 ---
 
+### 2026-09-28 — Windows (`neurodecoder/preprocess/windows.py`)
+
+**Decision:** `window_plan(split, context_bins=…, stride_bins=…)` runs
+`assert_split_valid` once for that context and returns a plan. For a session
+and partition, the plan allows a span of bins:
+- **`within_session`:** the partition's block.
+- **Other kinds:** the whole binned session, and only if the session is in that
+  partition.
+
+`extract(z, binned, partition, ends=None)` returns `(n_windows, n_units,
+context_bins)` float32 windows. It refuses any end whose window would leave the
+span. `unwindow` puts windows back on the session's bins.
+
+- **A window ending at bin e covers bins e − context + 1 … e.** Default ends
+  are every `stride_bins`-th bin from the first full window. Where targets sit
+  relative to a window, and which ends have a target, is left to `targets/`.
+  `extract` takes ends chosen elsewhere and still enforces the span.
+- **Context and stride are required,** with no defaults. Their values belong
+  in the run configs that come with models; the context also feeds the guard.
+- **Windows come from a strided view,** and indexing copies only the chosen
+  windows. **Batching is the caller's job:** on `d23a44ef`'s train block (78,885
+  bins, 397 units) windows take 0.13 GB at stride 50, 1.25 GB at stride 5, and
+  would take about 6 GB at stride 1. The data loader should pass `ends` in
+  batches.
+- **For cross-session splits the span is the whole binned session,** including
+  time before the first trial and after the last. Restricting to the task
+  period depends on the target, so `targets/` does it by choosing ends.
+
+**Verified on `d23a44ef`:**
+- The Phase 2 criterion "round-trip a session to tensors and back to spike
+  counts within float tolerance" passes: counts → normalised → windows
+  (context 50, stride 50) → `unwindow` → inverse → counts matches exactly on
+  every bin a window covers.
+- Train and test windows share no bin and are at least a context apart (the
+  roadmap's `test_no_temporal_leakage`, now at the window level).
+- Train gives 1,577 windows and test 731, extracted in ≤ 0.1 s.
+
 ### 2026-09-28 — Normalisation (`neurodecoder/preprocess/normalize.py`)
 
 **Decision (option chosen by the user):** per-unit statistics where the units
