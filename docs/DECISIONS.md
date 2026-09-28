@@ -6,6 +6,80 @@ first.
 
 ---
 
+### 2026-09-28 — BWM backend loads behaviour from `bwm_behavior` 2.0.0
+
+**Decision:** `load_session_bwm(eid, root, behaviour_root=None)` decodes the
+per-session `sessions/<eid>.zip` shard of the `bwm_behavior` 2.0.0 release
+(version pinned through its `manifest.json`), following ibl-ai-agent's own
+decoder. Unknown encoding kinds raise. `load_session("bwm")` passes the release
+from config. `LOADER_VERSION` is now 2, and the cache source gains
+`behaviour_version`, so every previously cached BWM session (including the 50
+from the Phase 1 check) becomes a miss; those entries are orphaned on disk.
+
+| Key | From the shard |
+|---|---|
+| `wheel` | `wheel.position` only, **not** the stored velocity, which bakes in IBL's smoothing filter (R6) |
+| `pose_{left,right,body}` | each keypoint's `_x`, `_y`, `_likelihood` columns, under IBL's ALF names |
+| `motion_energy_{left,right}` / `motion_energy_body` | `whiskerMotionEnergy` / `bodyMotionEnergy` |
+| `pupil_left` | `pupilDiameter_raw`, **not** `pupilDiameter_smooth` (R6) |
+| `pupil_right` | declared missing: the right camera has no pupil diameter in this release |
+| `lick` | declared missing: not in `bwm_behavior` |
+
+A source the build listed in a camera's `skipped_sources`, or a camera or
+shard that's absent, is declared missing with that reason.
+
+**What the release actually stores, measured against NWB on `d23a44ef`
+(ibl-ai-agent's docs understate it):**
+- **The wheel is resampled, not native.** It's the raw encoder position
+  linearly interpolated onto an exact 100 Hz grid (366,885 samples versus
+  NWB's 755,552 raw ones; only 15.7% of its times coincide with a raw sample)
+  and rounded to 0.001 rad. It's within **0.52 mrad** of NWB's raw wheel
+  interpolated at the same times (one encoder tick is 1.53 mrad).
+  **Phase 2 consequence:** a wheel-velocity target differs slightly by
+  backend. Build it from one declared source.
+- **Camera times are an ideal grid, not the frame times.** Each camera keeps
+  the real frame nearest each point of a uniform 60 Hz (left, right) or 30 Hz
+  (body) grid, and stores `start + i/rate` as its time. The right camera is
+  downsampled from ~150 Hz. Each grid time is within half a frame of its real
+  frame's time (max 8.3 / 3.3 / 16.6 ms for left / right / body). If a dropped
+  frame ever made two grid points pick the same frame, deduplication would
+  shift every later time by a whole frame. It doesn't happen in this session
+  (frame counts equal grid sizes), but the loader can't detect it from the
+  shard alone.
+- **Quantisation:** pose x/y to 0.5 px, likelihood to 8 bits, motion energy
+  and pupil diameter to 0.05.
+- **Right and body pose match NWB within quantisation** (x/y ≤ 0.25 px,
+  likelihood ≤ 0.002) at the matching frames: same tracker output, correct
+  decoding.
+- **Left-camera pose does not match NWB, unexplained.** At the correct frames,
+  x/y differ systematically: paw median ~11 px (max 447 px), pupil ~0.3–1.2 px
+  (max 3.7 px). Likelihoods are mostly identical. It isn't a frame offset (the
+  error is smallest at zero shift) and it isn't mirrored names (swapping
+  left/right makes it much worse). The likeliest cause is different
+  post-processing of left-camera x/y in one source, but it isn't recorded in
+  either dataset. Don't mix left-camera pose across backends.
+- **Pose NaNs differ by design.** NWB's converter blanks x/y where tracker
+  likelihood is below **0.9** (NaN ⇔ likelihood < 0.9, exactly: max 0.898
+  where NaN, min 0.902 where finite). BWM keeps the tracker's raw
+  low-confidence estimates, as its docs say. Neither loader applies a
+  threshold. To compare or combine backends, apply the same likelihood mask
+  to both; choosing it is a Phase 2 preprocessing decision.
+- **Keypoint names differ.** BWM uses IBL's ALF names (`paw_l`, `paw_r`,
+  `pupil_{top,bottom,left,right}_r`, `tongue_end_l/r`, `nose_tip`,
+  `tube_top`, `tube_bottom`, `tail_start`), while NWB's converter uses
+  `left_paw`, `right_paw`, `right_pupil_*`, `left/right_tongue_end`, and the
+  same names for the rest. BWM also has more left-camera keypoints (11 versus
+  NWB's 6). Aligning NWB to the ALF names is a separate NWB backend change.
+
+**Verified:** 11 tests.
+- 6 run in CI on a synthetic shard in the release's exact format: every
+  encoding kind, rejection of unknown kinds, canonical keys, position-only
+  wheel, raw pupil, and skipped sources declared missing.
+- 5 run on the real release against NWB: the wheel residual ≤ half a
+  quantisation step; right and body pose within quantisation, with frame
+  times within half a frame; left-camera frame timing within half a frame;
+  and the capability report.
+
 ### 2026-09-28 — ONE backend (`neurodecoder/data/backends/one_backend.py`), and three-way agreement
 
 **Decision:** `load_session_one(eid, one)` reads a session from IBL's public

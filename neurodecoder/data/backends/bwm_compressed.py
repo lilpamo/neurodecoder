@@ -1,13 +1,19 @@
-"""ibl-ai-agent's compressed Brain Wide Map dataset (`bwm_ephys`) -> Session.
+"""ibl-ai-agent's compressed Brain Wide Map datasets (`bwm_ephys`, `bwm_behavior`) -> Session.
 
 Checked against the DANDI NWB backend for session d23a44ef-1402-4ed7-97f5-47e9a7a504d9
 (see docs/DECISIONS.md): the same good units, identical spike counts, spike times
 within 50 us (they are stored rounded to 100 us ticks), and identical trials except
 firstMovement_times, which comes from a different trials revision.
+
+Behaviour comes from `bwm_behavior`, which stores resampled, quantised signals: the
+wheel is the raw position linearly interpolated onto a 100 Hz grid and rounded to
+0.001 rad, and each camera keeps the nearest real frame to a uniform 60 or 30 Hz grid,
+with the grid times standing in for the frame times (within half a frame).
 """
 
 import json
 import os
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -16,18 +22,22 @@ from numcodecs import Blosc
 
 from neurodecoder.data.session import (
     BEHAVIOUR_FIELDS,
+    CAMERA_SIGNALS,
     TRIAL_FIELDS,
     TRIAL_TIME_FIELDS,
     UNIT_FIELDS,
     Capabilities,
     Session,
+    TimeSeries,
 )
 
 DATASET_NAME = "bwm_ephys"
 # Pinned: a new release can change counts or encodings, like ONE and DANDI revisions.
 DATASET_VERSION = "1.2.1"
+BEHAVIOUR_DATASET_NAME = "bwm_behavior"
+BEHAVIOUR_DATASET_VERSION = "2.0.0"
 # Bump when this module's mapping into a Session changes; it invalidates cached sessions.
-LOADER_VERSION = 1
+LOADER_VERSION = 2
 
 _SHARD_FORMAT = {
     "format": "ibl_agent_spike_shard_v2",
@@ -43,7 +53,17 @@ _UNIT_EXTRAS = [
     "lateral_um",
     "spike_count",
 ]
-_BEHAVIOUR_REASON = "stored in the separate bwm_behavior dataset; not loaded by this backend yet"
+_NO_BEHAVIOUR_REASON = "no bwm_behavior release was given to the loader"
+_BEHAVIOUR_SHARD_FORMAT = "ibl_ai_agent_behavior_session_shard_v2"
+_CAMERAS = {"left": "leftCamera", "right": "rightCamera", "body": "bodyCamera"}
+_MOTION_ENERGY = {
+    "left": "whiskerMotionEnergy",
+    "right": "whiskerMotionEnergy",
+    "body": "bodyMotionEnergy",
+}
+# The raw diameter, not `pupilDiameter_smooth`: smoothing is a preprocessing choice.
+_PUPIL = "pupilDiameter_raw"
+_POSE_SUFFIXES = ("_x", "_y", "_likelihood")
 
 
 def _read_array(shard_dir: Path, meta: dict, name: str) -> np.ndarray:
@@ -92,13 +112,15 @@ def _split_by_unit(times: np.ndarray, local: np.ndarray, n_units: int) -> list[n
     return [sorted_times[bounds[i] : bounds[i + 1]] for i in range(n_units)]
 
 
-def _check_version(root: Path) -> None:
+def _check_release(root: Path, name: str, version: str) -> None:
     manifest = json.loads((root / "manifest.json").read_text())
     found = (manifest.get("dataset_name"), manifest.get("dataset_version"))
-    if found != (DATASET_NAME, DATASET_VERSION):
-        raise ValueError(
-            f"{root}: found {found}, this backend reads {DATASET_NAME} {DATASET_VERSION}"
-        )
+    if found != (name, version):
+        raise ValueError(f"{root}: found {found}, this backend reads {name} {version}")
+
+
+def _check_version(root: Path) -> None:
+    _check_release(root, DATASET_NAME, DATASET_VERSION)
 
 
 def _units_and_spikes(root: Path, eid: str) -> tuple[pd.DataFrame, dict[str, np.ndarray]]:
@@ -138,7 +160,135 @@ def _trials(root: Path, eid: str) -> pd.DataFrame:
     return trials[keep]
 
 
-def _time_bounds(spikes: dict[str, np.ndarray], trials: pd.DataFrame) -> tuple[float, float]:
+def _blosc(zf: zipfile.ZipFile, entry: str, spec: dict) -> np.ndarray:
+    dtype, shape = np.dtype(spec["dtype"]), tuple(spec["shape"])
+    if int(np.prod(shape)) == 0:
+        return np.empty(shape, dtype=dtype)
+    return np.frombuffer(Blosc().decode(zf.read(entry)), dtype=dtype).reshape(shape)
+
+
+def _scaled(encoded: np.ndarray, precision: float) -> np.ndarray:
+    """Integers times their precision; the integer type's minimum marks NaN."""
+    decoded = encoded.astype(np.float64) * precision
+    if np.issubdtype(encoded.dtype, np.integer):
+        decoded[encoded == np.iinfo(encoded.dtype).min] = np.nan
+    return decoded
+
+
+def _unpack_uint4(packed: np.ndarray, shape: tuple) -> np.ndarray:
+    packed = np.asarray(packed, dtype=np.uint8).ravel()
+    out = np.empty(packed.size * 2, dtype=np.uint8)
+    out[0::2], out[1::2] = packed >> 4, packed & 0x0F
+    return out[: int(np.prod(shape))].reshape(shape)
+
+
+def _feature_group(zf: zipfile.ZipFile, group: dict) -> np.ndarray:
+    kind = group["kind"]
+    if kind == "delta_scaled":
+        first = _blosc(zf, group["first_entry"], group["first_spec"]).astype(np.int64)
+        deltas = _blosc(zf, group["delta_entry"], group["delta_spec"]).astype(np.int64)
+        absolute = np.concatenate([first, first + np.cumsum(deltas, axis=0)], axis=0)
+        return absolute.astype(np.float64) * group["precision"]
+    if kind == "scaled":
+        return _scaled(_blosc(zf, group["entry"], group["payload_spec"]), group["precision"])
+    if kind == "likelihood":
+        bits, spec = int(group["bits"]), group["payload_spec"]
+        if bits == 4:
+            levels = _unpack_uint4(
+                _blosc(zf, group["entry"], spec["packed_uint4"]), tuple(spec["shape"])
+            )
+        else:
+            levels = _blosc(zf, group["entry"], spec)
+        decoded = levels.astype(np.float64) / (2**bits - 1)
+        if "nan_mask_entry" in group:
+            mask = np.unpackbits(_blosc(zf, group["nan_mask_entry"], group["nan_mask_spec"]))
+            decoded[mask[: decoded.size].astype(bool).reshape(decoded.shape)] = np.nan
+        return decoded
+    if kind == "float16":
+        return _blosc(zf, group["entry"], group["payload_spec"]).astype(np.float64)
+    raise ValueError(f"unsupported feature group kind {kind!r}")
+
+
+def _decode_behaviour_array(zf: zipfile.ZipFile, name: str, spec: dict) -> np.ndarray:
+    """Decode one shard array, following ibl-ai-agent's bwm_behavior_compression decoder."""
+    enc = spec["encoding"]
+    kind = enc["kind"]
+    if kind == "timestamp_fixed_rate":
+        return enc["start"] + np.arange(int(enc["count"]), dtype=np.float64) / enc["rate_hz"]
+    if kind == "timestamp_delta_ticks":
+        ticks = _blosc(zf, enc["ticks_entry"], enc["ticks_spec"]).astype(np.float64)
+        return enc["start"] + ticks * enc["tick_s"]
+    if kind == "scaled_numeric":
+        return _scaled(_blosc(zf, enc["entry"], enc["payload_spec"]), enc["precision"])
+    if kind == "feature_matrix":
+        out = np.empty(tuple(enc["shape"]), dtype=np.float64)
+        for group in enc["groups"]:
+            out[:, group["columns"]] = _feature_group(zf, group).reshape(len(out), -1)
+        return out
+    raise ValueError(f"{name}: unsupported encoding kind {kind!r}")
+
+
+def _read_behaviour_shard(path: str | os.PathLike) -> tuple[dict[str, np.ndarray], dict]:
+    """Decode every array in a bwm_behavior session shard; returns (arrays, meta)."""
+    with zipfile.ZipFile(path) as zf:
+        meta = json.loads(zf.read(next(n for n in zf.namelist() if n.endswith("meta.json"))))
+        if meta.get("format") != _BEHAVIOUR_SHARD_FORMAT:
+            raise ValueError(
+                f"{path}: format {meta.get('format')!r}, expected {_BEHAVIOUR_SHARD_FORMAT}"
+            )
+        arrays = {
+            name: _decode_behaviour_array(zf, name, spec) for name, spec in meta["arrays"].items()
+        }
+    return arrays, meta
+
+
+def _behaviour_from_shard(path: str | os.PathLike) -> tuple[dict[str, TimeSeries], dict[str, str]]:
+    """Map a session shard to canonical behaviour keys; returns (series, missing reasons)."""
+    arrays, meta = _read_behaviour_shard(path)
+    behaviour, missing = {}, {"lick": "not in bwm_behavior"}
+
+    if "wheel.timestamps" in arrays and "wheel.position" in arrays:
+        # Position only: the stored velocity bakes in IBL's smoothing filter.
+        behaviour["wheel"] = TimeSeries(arrays["wheel.timestamps"], arrays["wheel.position"])
+    else:
+        missing["wheel"] = "no wheel in this bwm_behavior session"
+
+    for camera, name in _CAMERAS.items():
+        signals = [s for s, cameras in CAMERA_SIGNALS.items() if camera in cameras]
+        info = meta.get("cameras", {}).get(name)
+        if info is None or f"{name}.features" not in arrays:
+            for signal in signals:
+                missing[f"{signal}_{camera}"] = f"no {name} in this bwm_behavior session"
+            continue
+        times, features = arrays[f"{name}.timestamps"], arrays[f"{name}.features"]
+        columns, skipped = list(info["columns"]), set(info.get("skipped_sources", []))
+
+        pose = [c for c in columns if c.endswith(_POSE_SUFFIXES)]
+        if pose:
+            behaviour[f"pose_{camera}"] = TimeSeries(
+                times, features[:, [columns.index(c) for c in pose]], channel_names=tuple(pose)
+            )
+        else:
+            missing[f"pose_{camera}"] = f"{name} has no pose keypoints in bwm_behavior"
+
+        for signal, column in (("motion_energy", _MOTION_ENERGY[camera]), ("pupil", _PUPIL)):
+            if signal not in signals:
+                continue
+            key = f"{signal}_{camera}"
+            if column in skipped:
+                missing[key] = (
+                    f"{column} skipped by the bwm_behavior build: timestamps did not match {name}"
+                )
+            elif column in columns:
+                behaviour[key] = TimeSeries(times, features[:, columns.index(column)])
+            else:
+                missing[key] = f"{name} has no {column} in bwm_behavior"
+    return behaviour, missing
+
+
+def _time_bounds(
+    spikes: dict[str, np.ndarray], trials: pd.DataFrame, behaviour: dict[str, TimeSeries]
+) -> tuple[float, float]:
     firsts = [t[0] for t in spikes.values() if t.size]
     lasts = [t[-1] for t in spikes.values() if t.size]
     trial_times = trials[[f for f in TRIAL_TIME_FIELDS if f in trials]].to_numpy(np.float64)
@@ -146,6 +296,10 @@ def _time_bounds(spikes: dict[str, np.ndarray], trials: pd.DataFrame) -> tuple[f
     if trial_times.size:
         firsts.append(trial_times.min())
         lasts.append(trial_times.max())
+    for series in behaviour.values():
+        if series.timestamps.size:
+            firsts.append(series.timestamps[0])
+            lasts.append(series.timestamps[-1])
     return float(min(firsts)), float(max(lasts))
 
 
@@ -159,32 +313,49 @@ def _declare_missing(table: pd.DataFrame, group: str, fields, missing: dict) -> 
     return table.drop(columns=[f for f in fields if f"{group}.{f}" in missing and f in table])
 
 
-def load_session_bwm(eid: str, root: str | os.PathLike) -> Session:
-    """Read one session from an extracted `bwm_ephys` release into a Session.
+def load_session_bwm(
+    eid: str, root: str | os.PathLike, behaviour_root: str | os.PathLike | None = None
+) -> Session:
+    """Read one session from extracted `bwm_ephys` (and optionally `bwm_behavior`) releases.
 
-    root: the release directory, e.g. .../bwm_compressed/bwm_ephys/1.2.1.
-    Units are IBL good units only (label == 1). Spike times are seconds, rounded to
-    the dataset's 100 us ticks. Trials keep the release's `bwm_include` flag as an
-    extra column; nothing is filtered here.
+    root: the bwm_ephys release directory, e.g. .../bwm_compressed/bwm_ephys/1.2.1.
+    behaviour_root: the bwm_behavior release directory; without it behaviour is declared
+    missing. Units are IBL good units only (label == 1). Spike times are seconds, rounded
+    to the dataset's 100 us ticks. Trials keep the release's `bwm_include` flag as an
+    extra column. Pose keeps the tracker's raw estimates and likelihood, unthresholded;
+    nothing is filtered here.
     """
     root = Path(root)
     _check_version(root)
     units, spikes = _units_and_spikes(root, eid)
     trials = _trials(root, eid)
 
-    missing = {f"behaviour.{f}": _BEHAVIOUR_REASON for f in BEHAVIOUR_FIELDS}
+    if behaviour_root is None:
+        behaviour, missing_behaviour = {}, {f: _NO_BEHAVIOUR_REASON for f in BEHAVIOUR_FIELDS}
+    else:
+        behaviour_root = Path(behaviour_root)
+        _check_release(behaviour_root, BEHAVIOUR_DATASET_NAME, BEHAVIOUR_DATASET_VERSION)
+        shard = behaviour_root / "sessions" / f"{eid}.zip"
+        if shard.exists():
+            behaviour, missing_behaviour = _behaviour_from_shard(shard)
+        else:
+            behaviour = {}
+            missing_behaviour = {f: "no session shard in bwm_behavior" for f in BEHAVIOUR_FIELDS}
+
+    missing = {f"behaviour.{f}": why for f, why in missing_behaviour.items()}
     trials = _declare_missing(trials, "trials", TRIAL_FIELDS, missing)
     units = _declare_missing(units, "units", UNIT_FIELDS, missing)
 
     present = {f"trials.{f}" for f in TRIAL_FIELDS if f in trials}
     present |= {f"units.{f}" for f in UNIT_FIELDS if f in units}
+    present |= {f"behaviour.{f}" for f in BEHAVIOUR_FIELDS if f in behaviour}
 
     return Session(
         eid=eid,
-        time_bounds=_time_bounds(spikes, trials),
+        time_bounds=_time_bounds(spikes, trials, behaviour),
         spikes=spikes,
         units=units,
         trials=trials,
-        behaviour={},
+        behaviour=behaviour,
         available=Capabilities(present=frozenset(present), missing=missing),
     )

@@ -91,7 +91,7 @@ def test_key_parts_pin_source_and_loader_versions():
     assert key_parts(EID, "bwm") == {
         "eid": EID,
         "backend": "bwm",
-        "source": {"dataset": "bwm_ephys", "version": "1.2.1"},
+        "source": {"dataset": "bwm_ephys", "version": "1.2.1", "behaviour_version": "2.0.0"},
         "loader_version": bwm_compressed.LOADER_VERSION,
     }
     assert key_parts(EID, "nwb")["source"] == {"dandiset": "000409", "version": "0.260309.1324"}
@@ -163,7 +163,9 @@ def _assert_same(a: Session, b: Session) -> None:
 @pytest.mark.skipif(not HAS_BWM, reason="BWM data not available")
 def test_bwm_through_the_entry_point_equals_the_backend(monkeypatch, tmp_path):
     cfg = _config(tmp_path, data_root=REAL_ROOT)
-    direct = bwm_compressed.load_session_bwm(EID, cfg.bwm_ephys_root)
+    direct = bwm_compressed.load_session_bwm(
+        EID, cfg.bwm_ephys_root, behaviour_root=cfg.bwm_behavior_root
+    )
     calls = []
     original = load_module.BACKENDS["bwm"]
 
