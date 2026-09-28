@@ -12,7 +12,10 @@ Kinds (docs/SPLITS_AND_LEAKAGE.md):
 - held_out_session: one session of each animal with >= 2 sessions is test; the rest train.
 - within_session: per session, early trials train and late trials test, as two
   contiguous time blocks separated by a gap. Trials in the gap belong to neither.
-held_out_region and held_out_config are not built yet.
+- held_out_region: sessions with >= 20% of their QC-passing units in Beryl region R
+  are test; sessions with no QC-passing unit that is or could be in R are train; the
+  rest are dropped.
+held_out_config is not built yet.
 
 Random choices use numpy's default_rng with the required seed. The saved file, not
 the seed, is the record: a different numpy could draw differently from the same seed.
@@ -32,14 +35,18 @@ import pandas as pd
 
 from neurodecoder.data.manifest import Manifest
 from neurodecoder.preprocess.binning import PreprocConfig
+from neurodecoder.qc.units import unit_qc
 
 SPLIT_FORMAT_VERSION = 1
 PARTITIONS = ("train", "calibration", "test")
 GROUP_KINDS = {"subject": "held_out_animal", "lab": "held_out_lab"}
-KINDS = (*GROUP_KINDS.values(), "held_out_session", "within_session")
+KINDS = (*GROUP_KINDS.values(), "held_out_session", "within_session", "held_out_region")
 # Behavioural autocorrelation outlives the neural context, so temporal splits keep at
 # least this much time between train and test whatever the context.
 MIN_GAP_S = 2.0
+# docs/SPLITS_AND_LEAKAGE.md: a held-out-region test session has at least this
+# fraction of its QC-passing units in the region.
+MIN_REGION_FRACTION = 0.2
 
 
 @dataclass(frozen=True)
@@ -49,7 +56,9 @@ class Split:
     partitions: partition name -> sorted eids.
     sessions: eid -> {"subject", "lab"}; within_session adds "blocks" (partition ->
       [start_s, stop_s]), "trials" (partition -> row indices into Session.trials) and
-      "trial_intervals" (one [intervals_0, intervals_1] per row of Session.trials).
+      "trial_intervals" (one [intervals_0, intervals_1] per row of Session.trials);
+      held_out_region adds QC-passing unit counts "n_units", "n_in_region" and
+      "n_possibly_in_region", for every manifest session, including dropped ones.
     manifest: provenance of the manifest the split was built from.
     preproc: {"fingerprint", "bin_ms"} of the preprocessing it was built for.
     """
@@ -228,6 +237,81 @@ def within_session(
     partitions = {"train": list(sessions), "test": list(sessions)}
     params = {"train_fraction": float(train_fraction), "gap_s": float(gap_s)}
     return _split("within_session", params, partitions, sessions, manifest, preproc)
+
+
+def _region_relatives(region: str) -> tuple[set[str], str]:
+    """Allen acronyms that contain or lie inside Beryl `region`, and the iblatlas version.
+
+    A unit labelled with one of these but with no Beryl region (e.g. STR for CP) could
+    be in the region.
+    """
+    from importlib.metadata import version
+
+    from iblatlas.regions import BrainRegions
+
+    regions = BrainRegions()
+    beryl = set(regions.acronym[np.unique(regions.mappings["Beryl"])]) - {"root", "void"}
+    if region not in beryl:
+        raise ValueError(f"{region!r} is not a Beryl region")
+    ids = regions.acronym2id(region)
+    relatives = set(regions.ancestors(ids)["acronym"]) | set(regions.descendants(ids)["acronym"])
+    return relatives, version("iblatlas")
+
+
+def held_out_region(
+    manifest: Manifest, units: pd.DataFrame, preproc: PreprocConfig, *, region: str
+) -> Split:
+    """Hold out Beryl region `region`, by the stricter definition in the split doc.
+
+    units: every unit of every manifest session, with eid, label, acronym, firing_rate
+    and beryl_acronym (the BWM release's metadata/units.parquet). Only units passing
+    preproc.qc count. A unit is in the region when its beryl_acronym is the region, and
+    possibly in it when it has no Beryl region and its Allen acronym contains or lies
+    inside the region. Test sessions have >= MIN_REGION_FRACTION of their units in the
+    region; train sessions have none in it or possibly in it; the rest are dropped.
+    """
+    meta = _session_meta(manifest)
+    covered = set(units["eid"])
+    missing, unknown = sorted(set(meta) - covered), sorted(covered - set(meta))
+    if missing or unknown:
+        raise ValueError(f"units table lacks sessions {missing[:3]}, has unknown {unknown[:3]}")
+    relatives, atlas_version = _region_relatives(region)
+
+    passing = units[unit_qc(units, preproc.qc)["passed"].to_numpy()]
+    beryl = passing["beryl_acronym"]
+    counts = (
+        pd.DataFrame(
+            {
+                "n_units": 1,
+                "n_in_region": beryl == region,
+                "n_possibly_in_region": beryl.isna() & passing["acronym"].isin(relatives),
+            }
+        )
+        .groupby(passing["eid"].to_numpy())
+        .sum()
+    )
+    counts = counts.reindex(sorted(meta), fill_value=0).astype(np.int64)
+
+    sessions, partitions = {}, {"train": [], "test": []}
+    for eid, n in counts.iterrows():
+        sessions[eid] = {**meta[eid], **{k: int(v) for k, v in n.items()}}
+        # k / n, not k >= 0.2 * n: 0.2 * 35 is 7.000000000000001, but 7 / 35 is 0.2.
+        if n["n_units"] and n["n_in_region"] / n["n_units"] >= MIN_REGION_FRACTION:
+            partitions["test"].append(eid)
+        elif n["n_units"] and n["n_in_region"] == n["n_possibly_in_region"] == 0:
+            partitions["train"].append(eid)
+    if not partitions["test"]:
+        raise ValueError(
+            f"no session has {MIN_REGION_FRACTION:.0%} of its QC-passing units in {region}"
+        )
+    if not partitions["train"]:
+        raise ValueError(f"no session is free of units that are or could be in {region}")
+    params = {
+        "region": region,
+        "min_region_fraction": MIN_REGION_FRACTION,
+        "atlas": f"iblatlas {atlas_version}",
+    }
+    return _split("held_out_region", params, partitions, sessions, manifest, preproc)
 
 
 def save_split(split: Split, path: str | os.PathLike) -> Path:

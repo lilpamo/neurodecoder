@@ -6,7 +6,9 @@ It raises and never warns. It checks (docs/SPLITS_AND_LEAKAGE.md, "The guard API
 - across partitions (calibration included), animal-level splits share no subject,
   lab-level splits share no lab, and non-temporal splits share no session;
 - within a session, the blocks share no bin and are at least max(context, 2 s) apart;
-- every listed trial is in one partition only and lies wholly inside its block.
+- every listed trial is in one partition only and lies wholly inside its block;
+- for a held-out region, by the split's recorded unit counts, test sessions have at
+  least 20% of their units in the region and train sessions none that is or could be.
 """
 
 import math
@@ -18,6 +20,7 @@ from neurodecoder.splits.registry import (
     GROUP_KINDS,
     KINDS,
     MIN_GAP_S,
+    MIN_REGION_FRACTION,
     PARTITIONS,
     Split,
     bin_range,
@@ -52,6 +55,8 @@ def assert_split_valid(
         shared = sorted(set(split.partitions[a]) & set(split.partitions[b]))
         if shared:
             raise ValueError(f"session {shared[0]} is in both {a} and {b}")
+    if split.kind == "held_out_region":
+        _check_region(split)
     key = _GROUP_KEYS.get(split.kind)
     if key is None:
         return
@@ -60,6 +65,26 @@ def assert_split_valid(
         shared = sorted(values[0] & values[1])
         if shared:
             raise ValueError(f"{key} {shared[0]} is in both {a} and {b}")
+
+
+def _check_region(split: Split) -> None:
+    """From the recorded unit counts: test sessions are mostly in the region, and train
+    sessions have no unit that is or could be in it."""
+    region = split.params["region"]
+    for eid in split.partitions["test"]:
+        s = split.sessions[eid]
+        if not s["n_units"] or s["n_in_region"] / s["n_units"] < MIN_REGION_FRACTION:
+            raise ValueError(
+                f"test session {eid} has {s['n_in_region']} of {s['n_units']} units in "
+                f"{region}, under {MIN_REGION_FRACTION:.0%}"
+            )
+    for eid in split.partitions["train"]:
+        s = split.sessions[eid]
+        if s["n_in_region"] or s["n_possibly_in_region"]:
+            raise ValueError(
+                f"train session {eid} has {s['n_in_region']} units in {region} and "
+                f"{s['n_possibly_in_region']} possibly in it"
+            )
 
 
 def _check_versions(split: Split, provenance: dict | None, fingerprint: str | None) -> None:
