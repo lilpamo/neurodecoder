@@ -11,6 +11,7 @@ Writes manifest.json first (status "running", updated after each target):
 
 Also split.json. Per target, <target>/ holds:
 - report.txt: the six-row table and verdicts;
+- normalizer.json: the Normalizer fit on the split's training data, with its hash (R3);
 - metrics.json: every per-session metric, the summary, the verdicts and any dropped
   trials; the numbers any later report must trace back to;
 - per_session.parquet and shuffle.parquet.
@@ -154,6 +155,9 @@ def _jsonable(value):
 
 def _write_target(out: Path, target: str, result: ContractResult, provider: SplitData, note: str):
     out.mkdir(parents=True, exist_ok=True)
+    # R3: the normalisation statistics, fit on training data only, travel with the run.
+    normalizer = provider.normalizer.to_dict()
+    (out / "normalizer.json").write_text(json.dumps(_jsonable(normalizer), allow_nan=False))
     (out / "report.txt").write_text(f"{target}\n{note}\n{result.report()}\n")
     per_session = pd.concat(result.per_session, names=["row", "eid"])
     per_session.to_parquet(out / "per_session.parquet")
@@ -170,6 +174,7 @@ def _write_target(out: Path, target: str, result: ContractResult, provider: Spli
         "summary": result.summary().to_dict(orient="index"),
         "verdicts": [vars(v) for v in result.verdicts],
         "dropped": {f"{e}/{p}": n for (e, p), n in provider.dropped.items()},
+        "normalizer_hash": provider.normalizer.hash,
     }
     (out / "metrics.json").write_text(json.dumps(_jsonable(metrics), indent=1, allow_nan=False))
 
@@ -258,7 +263,10 @@ def run(
             **decoders(target, provider, baselines),
         )
         _write_target(out / target, target, result, provider, note)
-        run_manifest["targets"][target] = {"seconds": round(time.time() - start, 1)}
+        run_manifest["targets"][target] = {
+            "seconds": round(time.time() - start, 1),
+            "normalizer_hash": provider.normalizer.hash,
+        }
         save_manifest()
         print(f"{target}: done in {time.time() - start:.0f} s", flush=True)
     run_manifest["status"] = "complete"

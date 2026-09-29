@@ -6,6 +6,7 @@ import pytest
 from test_eval_data import EIDS, SESSIONS, _manifest
 
 from neurodecoder.cli.evaluate import REPO, load_run_config, run, select_sessions
+from neurodecoder.preprocess.normalize import Normalizer
 from neurodecoder.splits.registry import load_split
 
 FIRST_TABLE = REPO / "configs/runs/phase3_first_table.yaml"
@@ -75,3 +76,11 @@ def test_a_run_logs_everything(tmp_path):
         assert table.index.names == ["row", "eid"]
         assert pd.read_parquet(folder / "shuffle.parquet").shape[1] == 5
         assert manifest["targets"][target]["seconds"] >= 0
+        # R3: the training-only normalisation statistics are stored with the run.
+        normalizer = Normalizer.from_dict(json.loads((folder / "normalizer.json").read_text()))
+        assert (
+            normalizer.hash
+            == metrics["normalizer_hash"]
+            == manifest["targets"][target]["normalizer_hash"]
+        )
+        assert normalizer.split_hash == manifest["split_hash"]
