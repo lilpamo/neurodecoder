@@ -315,6 +315,47 @@ numeral in the HTML report traceable to an artifact field.
 
 ---
 
+## Phase 8b — Local app
+
+**Objective.** A non-programmer picks a recording (an IBL session or a supported
+NWB file), picks a target, presses run, and reads a report with clear trust
+flags, without a terminal. The app runs locally, in a browser UI on the user's
+own machine; it is not a hosted web app. See `docs/DECISIONS.md`, "Local app
+for non-programmers (Phase 8b)".
+
+**Tasks.**
+- **A front end over the CLI.** It calls `neurodecoder analyze` and the other
+  CLI entry points, and reads their artifacts in `runs/`. It has no data,
+  split, training or evaluation path of its own.
+- **The report view** always shows the full six-row table and the null
+  verdicts, never a bare score. Report prose comes only from artifacts (the
+  LLM boundary, CLAUDE.md §6).
+- **A refusal screen** for unsupported input, stating the reason ("I can
+  predict A and B, not C, and here is why").
+- **A read-only browser of past runs.**
+- **A one-step installer for Mac, Windows and Linux**, with in-app data
+  download and progress. Evaluate conda constructor, pixi and PyInstaller.
+- **Choose the UI framework** (Streamlit, Panel, NiceGUI or similar) at the
+  start of this phase.
+
+**Success criteria.**
+- A non-programmer installs with one installer and produces a report on a
+  supported session without a terminal.
+- Every number shown is traceable to an artifact field.
+- Unsupported input shows a refusal with its reason, never a traceback.
+- A test proves the app only calls CLI entry points.
+
+**Failure points.**
+- Packaging PyTorch and the IBL stack (with its llvmlite/numba pins)
+  cross-platform.
+- Scope creep into running analyses the CLI doesn't support.
+
+Build after Phase 8, never before Phases 4–7, which change what the app shows.
+
+**Hours: 60–120** (including packaging).
+
+---
+
 ## Phase 9 — Future-horizon prediction *(conditional — audit SpikeProphecy first)*
 
 If SpikeProphecy already covers this, reduce to a small controlled experiment:

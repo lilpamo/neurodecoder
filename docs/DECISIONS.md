@@ -6,6 +6,57 @@ first.
 
 ---
 
+### 2026-09-29 — Local app for non-programmers (Phase 8b)
+
+**Decision:** build a **local app**: a browser UI that runs on the user's own
+machine, shipped as an installer. Not a hosted web app. This reverses CLAUDE.md
+§2's "not a web app" for this one case; hosted web apps stay excluded.
+- There are no server costs.
+- Data stays in the lab.
+- Multi-GB NWB files never need uploading.
+
+**Purpose:** a non-programmer picks a recording (an IBL session or a supported
+NWB file), picks a target, presses run, and reads a report with clear trust
+flags. They can also browse past runs, read-only.
+
+**Rules the app must keep:**
+- **It is a front end only.** It calls CLI entry points (Phase 8's
+  `neurodecoder analyze`) and reads their artifacts in `runs/`. It has no data,
+  split, training or evaluation path of its own, so every result it shows has
+  still passed:
+  - the split registry;
+  - `assert_split_valid`;
+  - the six-row contract.
+- **It always shows the full six-row table and the null verdicts,** never a
+  bare score.
+- **The LLM boundary (§6) is unchanged:** report prose comes only from
+  artifacts.
+- **Unsupported input gets a refusal screen that states the reason,** per
+  Phase 11's "I can predict A and B, not C, and here is why". Never a
+  traceback.
+
+**Installation is the hardest part.** It needs:
+- Python 3.11;
+- PyTorch;
+- the IBL stack with its llvmlite/numba pins (see "`ONE-api`/`ibllib` installs
+  on this machine need llvmlite/numba pinned first");
+- gigabytes of data.
+
+Plan a one-step installer for Mac, Windows and Linux, with in-app data download
+and progress. Packaging options to evaluate later: conda constructor, pixi,
+PyInstaller.
+
+**UI framework:** Streamlit, Panel, NiceGUI or similar, decided at Phase 8b,
+not now.
+
+**Timing:** build after Phase 8, never before Phases 4–7, which change what the
+app shows. Estimate 60–120 h including packaging.
+
+**Alternatives considered:**
+- **A hosted web app:** compute costs, data uploads, and data governance.
+- **A read-only viewer only:** doesn't serve non-programmers, who need to start
+  a run.
+
 ### 2026-09-29 — NWB probe, and what full NWB intake would take (`neurodecoder/nwb/probe.py`)
 
 **Decision:** `probe(path or URL)` / `python -m neurodecoder.nwb.probe` reports
