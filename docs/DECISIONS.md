@@ -6,6 +6,63 @@ first.
 
 ---
 
+### 2026-09-29 — NWB probe, and what full NWB intake would take (`neurodecoder/nwb/probe.py`)
+
+**Decision:** `probe(path or URL)` / `python -m neurodecoder.nwb.probe` reports
+what an arbitrary NWB file holds. It is thin, as the roadmap says: no
+normalisation, no model, no `Session`. It reads metadata and small samples
+only; a whole spike-times or raw-data array is never loaded, and URLs are
+streamed with remfile. Any section that can't be read goes under `errors`,
+and an unreadable file is a result, never an exception. It reports:
+- **units:** count, columns, spike count (the ragged column's target, not its
+  per-unit index);
+- **QC columns:** any units column whose name contains "label" or "quality",
+  which catches `quality`, `KSLabel`, and IBL's `ibl_quality_score` and
+  `kilosort2_label`;
+- **location:** per-unit location, from a units column or via
+  `units.electrodes`;
+- **intervals:** trials and other interval tables;
+- **series:** every time series in acquisition and processing (shape, unit,
+  rate, duration);
+- **behaviour mapping:** name matches onto the pipeline's behaviour fields;
+- **a usability tier.**
+
+**Survey** (2026-09-29; the ROADMAP asks for ≥ 5 foreign files classified
+without crashing, and that is met):
+
+| File (dandiset, version) | Size | Units / spikes | QC column | Unit location | Intervals | Behaviour matched | Tier |
+|---|---|---|---|---|---|---|---|
+| 000409 `d23a44ef` (local) | — | 1,961 / 62.0M | `ibl_quality_score`, `kilosort2_label` | electrodes via units | trials 410 | wheel, pose, pupil, motion energy | decodable |
+| 000409 `db4df448` (streamed, 72 s) | — | 709 / 15.6M | same | same | trials 402 | same | decodable |
+| 000409 `3638d102` (streamed, 88 s) | — | 860 / 20.2M | same | same | trials 695 | same | decodable |
+| 000017 Steinmetz 2019, `sub-Richards_ses-20171031` | 204 MB | 778 / 4.7M | none | electrodes via units | trials 260 | wheel, lick, pupil, motion energy | decodable |
+| 000021 Allen Visual Coding Neuropixels, `ses-721123822` | 1.7 GB | 1,603 / 79.8M | `quality` | **none** (units link by `peak_channel_id`, not `electrodes`) | stimulus tables only, no trials | running wheel | partial |
+| 000053 MEC linear track, `sub-npI1_ses-20190416` | 71.7 GB | 408 / 3.9M | none | **none** | trials 149 | none (track position isn't a pipeline field) | partial |
+| 000059 medial septum cooling, `sub-MS10` processed | 3 MB | **no units table** (trials, position, speed, temperature only) | — | — | trials 142 | none | no units |
+| 000128 MC_Maze, `desc-train` | 691 MB | 182 / 3.6M | none | electrodes via units | trials 2,295 | none (hand, cursor and eye position) | partial |
+
+**What full intake would take** (for the Phase 11 plan):
+1. **Spikes and units: small.** The standard `nwb.units` table was readable in
+   every file that had one (6 of 7).
+2. **Unit QC: needs a policy decision.** 4 of the 5 foreign files have no QC
+   label at all, and Allen's `quality` means something different from IBL's
+   label. Under our rule a missing label fails the unit, so today's QC would
+   reject every unit in those files.
+3. **Location: moderate, per dataset.** Two of the five foreign files have no
+   standard per-unit location (Allen links units through `peak_channel_id`).
+   Region names also need mapping to Beryl, and the conventions differ between
+   datasets.
+4. **Targets: the large part, and task-specific.**
+   - Only Steinmetz 2019 shares IBL's wheel task.
+   - The others need their own targets (reach kinematics, track position,
+     running speed, stimulus identity) and trial definitions.
+   - Name-matching behaviour to our fields is only a triage heuristic.
+
+**Estimate:** spikes, units and location for standard files take about a
+week. Each new task needs its own targets and a QC policy, a few days to a
+week per dataset. A general "any NWB" decoder isn't realistic; intake per
+dataset family is.
+
 ### 2026-09-29 — Running the contract and logging runs (`neurodecoder/cli/evaluate.py`, `configs/runs/`)
 
 **Decision:** `python -m neurodecoder.cli.evaluate <run config>` runs the
