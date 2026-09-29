@@ -16,6 +16,10 @@ null_trialstruct: features from task variables only, never spikes:
 - block: the previous trials' stimulus side, choice and reward only. Block is decoded
   from a pre-stimulus window, so the current stimulus is not available to it either.
 
+null_pseudosession (block only; adopted after the first table): labels from
+pseudo-sessions drawn from the task's own block generator, a seeded port of IBL's
+brainbox generate_pseudo_blocks (the Brain Wide Map paper's null).
+
 Fitting these features is the baseline models' job; this module only builds them.
 """
 
@@ -48,6 +52,7 @@ class NullConfig:
     time_bin_s: float
     max_time_s: float
     history_trials: int
+    n_pseudo_sessions: int = 100
 
     def __post_init__(self) -> None:
         for name in ("n_shifts", "min_shift_trials", "history_trials"):
@@ -67,12 +72,14 @@ class NullConfig:
 
 def load_null_config(path: str | os.PathLike = DEFAULT_CONFIG) -> NullConfig:
     raw = yaml.safe_load(Path(path).read_text()) or {}
-    if set(raw) != {"null_shuffle", "null_trialstruct"}:
-        raise ValueError(f"{path}: keys {sorted(raw)}, expected null_shuffle, null_trialstruct")
+    sections = {"null_shuffle", "null_trialstruct", "null_pseudosession"}
+    if set(raw) != sections:
+        raise ValueError(f"{path}: keys {sorted(raw)}, expected {sorted(sections)}")
     shuffle, trialstruct = raw["null_shuffle"], raw["null_trialstruct"]
     expected = {
         "null_shuffle": {"n_shifts", "min_shift_s", "min_shift_trials"},
         "null_trialstruct": {"time_bin_s", "max_time_s", "history_trials"},
+        "null_pseudosession": {"n_sessions"},
     }
     for section, keys in expected.items():
         if set(raw[section]) != keys:
@@ -86,7 +93,36 @@ def load_null_config(path: str | os.PathLike = DEFAULT_CONFIG) -> NullConfig:
         time_bin_s=float(trialstruct["time_bin_s"]),
         max_time_s=float(trialstruct["max_time_s"]),
         history_trials=trialstruct["history_trials"],
+        n_pseudo_sessions=raw["null_pseudosession"]["n_sessions"],
     )
+
+
+# IBL's biased-block protocol: block lengths ~ exponential(60), redrawn until strictly
+# between 20 and 100 trials, sides alternating, after 90 unbiased trials.
+IBL_BLOCK_FACTOR, IBL_BLOCK_MIN, IBL_BLOCK_MAX, IBL_UNBIASED_TRIALS = 60.0, 20, 100, 90
+
+
+def generate_pseudo_blocks(n_trials: int, *, seed: int) -> np.ndarray:
+    """(n_trials,) probabilityLeft of one pseudo-session: 0.5 for the first 90 trials,
+    then alternating 0.2 / 0.8 blocks with IBL's length distribution.
+
+    A port of brainbox.task.closed_loop.generate_pseudo_blocks (ibllib 4.0.1) with a
+    seeded generator: the same distribution, not the same random stream (brainbox
+    uses numpy's global RNG and draws an extra integer on every loop).
+    """
+    rng = np.random.default_rng(seed)
+    first = min(IBL_UNBIASED_TRIALS, n_trials)
+    blocks: list[float] = []
+    while len(blocks) < n_trials - first:
+        length = rng.exponential(IBL_BLOCK_FACTOR)
+        while length <= IBL_BLOCK_MIN or length >= IBL_BLOCK_MAX:
+            length = rng.exponential(IBL_BLOCK_FACTOR)
+        if not blocks:
+            side = 0.2 if rng.integers(2) == 0 else 0.8
+        else:
+            side = 0.8 if blocks[-1] == 0.2 else 0.2
+        blocks += [side] * int(length)
+    return np.array([0.5] * first + blocks[: n_trials - first])
 
 
 def draw_shifts(length: int, min_shift: int, n_shifts: int, *, seed: int) -> np.ndarray:

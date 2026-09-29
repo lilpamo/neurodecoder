@@ -13,12 +13,20 @@ Ridge solves every lambda and fold from one Gram matrix per session. Logistic wa
 the lambda path from strong to weak regularisation, warm-started, and stops a fold's
 path once its validation loss has risen twice in a row past its minimum; a lambda a
 fold never reached can't be selected.
+
+Penalties can be weighted per feature (lambda * sum w_j beta_j² on standardised
+features). SpikesAndTaskRidge / SpikesAndTaskLogistic (the contract's model_with_task
+row) use that to give the spike features and the task features separate penalties:
+the task-to-spike ratio is chosen with lambda by the same CV. Sessions can be fit in
+parallel (n_jobs); features are built in the parent and handed to workers lazily.
 """
 
+import dataclasses
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
+from joblib import Parallel, delayed
 from scipy.special import expit
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss
@@ -69,12 +77,16 @@ class GramSums:
             self.sy - other.sy,
         )
 
-    def solve(self, lambdas: Sequence[float]) -> list[tuple[np.ndarray, float]]:
-        """(coef, intercept) on the raw feature scale, for each per-sample lambda."""
+    def solve(self, lambdas: Sequence[float], weights=None) -> list[tuple[np.ndarray, float]]:
+        """(coef, intercept) on the raw feature scale, for each per-sample lambda.
+
+        weights: optional (p,) per-feature penalty weights on the standardised scale.
+        """
         mean_x, mean_y = self.sx / self.n, self.sy / self.n
         gram = self.sxx - self.n * np.outer(mean_x, mean_x)
         cross = self.sxy - self.n * mean_x * mean_y
-        std = _std(np.diag(gram) / self.n)
+        # Rescaling a standardised column by 1/sqrt(w) turns penalty w * beta² into beta².
+        std = _std(np.diag(gram) / self.n) * (1.0 if weights is None else np.sqrt(weights))
         eigvals, eigvecs = np.linalg.eigh(gram / np.outer(std, std))
         projected = eigvecs.T @ (cross / std)
         out = []
@@ -96,22 +108,40 @@ class SessionModel:
     intercept: float
     validation_loss: tuple[float, ...]  # mean over folds, one per lambda (inf: unreached)
     at_grid_edge: bool
+    task_penalty_ratio: float | None = None  # SpikesAndTask only
 
 
 class _PerSession:
     kind = ""
 
-    def __init__(self, n_chunks: int, cv: CVConfig):
-        self.n_chunks, self.cv = n_chunks, cv
+    def __init__(self, n_chunks: int, cv: CVConfig, *, n_jobs: int = 1):
+        self.n_chunks, self.cv, self.n_jobs = n_chunks, cv, n_jobs
         self.models: dict[str, SessionModel] = {}
 
-    def fit(self, train: Sequence[SessionData], *, seed: int) -> None:
+    def _inputs(self, train: Sequence[SessionData]):
         for data in train:
-            x = self._features(data)
-            y = np.asarray(data.y, dtype=np.float64)
             gap = gap_bins(data.context_bins, data.bin_ms)
             folds = gapped_folds(data.ends, data.context_bins, gap, self.cv.n_folds)
-            self.models[data.eid] = self._fit_session(data.eid, x, y, folds, seed)
+            yield data.eid, self._features(data), np.asarray(data.y, dtype=np.float64), folds
+
+    def fit(self, train: Sequence[SessionData], *, seed: int) -> None:
+        if self.n_jobs == 1:
+            for eid, x, y, folds in self._inputs(train):
+                self.models[eid] = self._fit_session(eid, x, y, folds, seed)
+            return
+        jobs = (
+            (eid, delayed(self._fit_session)(eid, x, y, folds, seed))
+            for eid, x, y, folds in self._inputs(train)
+        )
+        eids = []
+
+        def calls():
+            for eid, call in jobs:
+                eids.append(eid)
+                yield call
+
+        fitted = Parallel(n_jobs=self.n_jobs, pre_dispatch="2*n_jobs")(calls())
+        self.models.update(zip(eids, fitted))
 
     def _model(self, data: SessionData) -> SessionModel:
         if data.eid not in self.models:
@@ -133,24 +163,26 @@ class _PerSession:
     def _features(self, data: SessionData) -> np.ndarray:
         return chunk_features(data, self.n_chunks)
 
-    def _fit_session(self, eid, x, y, folds, seed) -> SessionModel:
+    def _fit_session(self, eid, x, y, folds, seed, weights=None) -> SessionModel:
         raise NotImplementedError
 
 
 class RidgeDecoder(_PerSession):
     kind = "regression"
 
-    def _fit_session(self, eid, x, y, folds, seed) -> SessionModel:
+    def _fit_session(self, eid, x, y, folds, seed, weights=None) -> SessionModel:
         total = GramSums.of(x, y)
         losses = np.zeros(len(self.cv.lambdas))
         for train_idx, val_idx in folds:
             held_out = np.setdiff1d(np.arange(len(x)), train_idx)
-            solutions = (total - GramSums.of(x[held_out], y[held_out])).solve(self.cv.lambdas)
+            fold = total - GramSums.of(x[held_out], y[held_out])
             xv, yv = x[val_idx].astype(np.float64), y[val_idx]
-            losses += [np.mean((yv - xv @ c - b) ** 2) for c, b in solutions]
+            losses += [
+                np.mean((yv - xv @ c - b) ** 2) for c, b in fold.solve(self.cv.lambdas, weights)
+            ]
         losses /= len(folds)
         best, edge = self._select(losses)
-        coef, intercept = total.solve([self.cv.lambdas[best]])[0]
+        coef, intercept = total.solve([self.cv.lambdas[best]], weights)[0]
         return SessionModel(self.cv.lambdas[best], coef, intercept, tuple(losses), edge)
 
     def predict(self, data: SessionData) -> np.ndarray:
@@ -161,14 +193,15 @@ class LogisticDecoder(_PerSession):
     kind = "classification"
 
     @staticmethod
-    def _standardise(x: np.ndarray):
+    def _standardise(x: np.ndarray, weights=None):
+        """Standardise, then rescale by 1/sqrt(w) so the penalty weights become uniform."""
         mean = x.mean(axis=0, dtype=np.float64)
-        std = _std(x.var(axis=0, dtype=np.float64))
+        std = _std(x.var(axis=0, dtype=np.float64)) * (1.0 if weights is None else np.sqrt(weights))
         return (x - mean) / std, mean, std
 
-    def _fold_losses(self, x, y, train_idx, val_idx, seed) -> np.ndarray:
+    def _fold_losses(self, x, y, train_idx, val_idx, seed, weights=None) -> np.ndarray:
         """Validation log loss per lambda, strongest regularisation first; inf if unreached."""
-        xt, mean, std = self._standardise(x[train_idx])
+        xt, mean, std = self._standardise(x[train_idx], weights)
         xv = (x[val_idx] - mean) / std
         losses = np.full(len(self.cv.lambdas), np.inf)
         model = LogisticRegression(max_iter=2000, warm_start=True, random_state=seed)
@@ -183,11 +216,11 @@ class LogisticDecoder(_PerSession):
                 break
         return losses
 
-    def _fit_session(self, eid, x, y, folds, seed) -> SessionModel:
+    def _fit_session(self, eid, x, y, folds, seed, weights=None) -> SessionModel:
         if np.unique(y).size < 2:
             raise ValueError(f"{eid}: training labels have one class; logistic can't be fit")
         per_fold = [
-            self._fold_losses(x, y, tr, va, seed)
+            self._fold_losses(x, y, tr, va, seed, weights)
             for tr, va in folds
             if np.unique(y[tr]).size == 2  # a fold whose training part holds one class
         ]
@@ -196,7 +229,7 @@ class LogisticDecoder(_PerSession):
         losses = np.mean(per_fold, axis=0)
         best, edge = self._select(losses)
         lam = self.cv.lambdas[best]
-        xs, mean, std = self._standardise(x)
+        xs, mean, std = self._standardise(x, weights)
         final = LogisticRegression(C=1.0 / (2.0 * len(x) * lam), max_iter=2000, random_state=seed)
         final.fit(xs, y)
         coef = final.coef_[0].astype(np.float64) / std
@@ -214,8 +247,8 @@ class _TaskFeatures:
     Reads data.task_features only; the contract passes this row's data with z = None.
     """
 
-    def __init__(self, cv: CVConfig):
-        super().__init__(n_chunks=1, cv=cv)
+    def __init__(self, cv: CVConfig, *, n_jobs: int = 1):
+        super().__init__(n_chunks=1, cv=cv, n_jobs=n_jobs)
 
     def _features(self, data: SessionData) -> np.ndarray:
         return np.asarray(data.task_features, dtype=np.float32)
@@ -226,4 +259,45 @@ class TrialStructureRidge(_TaskFeatures, RidgeDecoder):
 
 
 class TrialStructureLogistic(_TaskFeatures, LogisticDecoder):
+    pass
+
+
+class _SpikesAndTask:
+    """The model's spike features plus the null_trialstruct features: model_with_task.
+
+    The spike block has penalty weight 1 and the task block weight `ratio`, with the
+    ratio chosen from `ratios` jointly with lambda by the same gapped CV (the lowest
+    mean validation loss over every (ratio, lambda)). Separate penalties stop ~100-400
+    spike features from drowning ~30 task features under one shared lambda.
+    """
+
+    def __init__(self, n_chunks: int, cv: CVConfig, ratios, *, n_jobs: int = 1):
+        super().__init__(n_chunks=n_chunks, cv=cv, n_jobs=n_jobs)
+        self.ratios = tuple(float(r) for r in ratios)
+
+    def _features(self, data: SessionData) -> np.ndarray:
+        spikes = chunk_features(data, self.n_chunks)
+        return np.hstack([spikes, np.asarray(data.task_features, dtype=np.float32)])
+
+    def _fit_session(self, eid, x, y, folds, seed, weights=None) -> SessionModel:
+        n_task = self._n_task
+        best = None
+        for ratio in self.ratios:
+            w = np.concatenate([np.ones(x.shape[1] - n_task), np.full(n_task, ratio)])
+            model = super()._fit_session(eid, x, y, folds, seed, w)
+            if best is None or min(model.validation_loss) < min(best.validation_loss):
+                best = dataclasses.replace(model, task_penalty_ratio=ratio)
+        return best
+
+    def fit(self, train: Sequence[SessionData], *, seed: int) -> None:
+        first = train[0] if len(train) else None
+        self._n_task = 0 if first is None else first.task_features.shape[1]
+        super().fit(train, seed=seed)
+
+
+class SpikesAndTaskRidge(_SpikesAndTask, RidgeDecoder):
+    pass
+
+
+class SpikesAndTaskLogistic(_SpikesAndTask, LogisticDecoder):
     pass

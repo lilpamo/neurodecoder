@@ -5,6 +5,22 @@ in this repo. One entry per experiment, newest first.
 
 ---
 
+### 2026-09-29 — Phase 3 first six-row table: decision gate not passed
+
+**Run:** `runs/20260929T070943Z_phase3_first_table`, git SHA `81edcfe` (clean),
+config `configs/runs/phase3_first_table.yaml`.
+
+**Verdict lines (model vs null_trialstruct), as the contract printed them:**
+- choice: model does NOT beat null_trialstruct (median Δauroc -0.071, wins 4/10 sessions, Wilcoxon p = 0.968): this is not decoding.
+- block: model does NOT beat null_trialstruct (median Δauroc -0.307, wins 0/9 sessions, Wilcoxon p = 1): this is not decoding.
+- wheel_velocity: model does NOT beat null_trialstruct (median Δr2 +0.053, wins 6/10 sessions, Wilcoxon p = 0.577): this is not decoding.
+- movement_state: model beats null_trialstruct (median Δauroc +0.281, wins 10/10 sessions, Wilcoxon p = 0.000977).
+
+The full six-row tables and the other verdict lines are in each target's
+`report.txt` in the run directory.
+
+**Status:** gate not passed; investigation pending.
+
 ### 2026-09-27 — Reproducing one NEDS decoding number on one session (Phase 0 task 1)
 
 **What was tried:** Cloned NEDS (`external/NEDS`, gitignored) and ran its own

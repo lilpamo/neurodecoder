@@ -6,6 +6,101 @@ first.
 
 ---
 
+### 2026-09-29 — Phase 3 gate: the incremental row, leave-one-block-out and pseudo-sessions for block — adopted AFTER the first table
+
+**Made after seeing the first table** (`runs/20260929T070943Z_phase3_first_table`,
+gate not passed, `docs/NEGATIVE_RESULTS.md`). Proposed in
+`docs/proposals/phase3_gate_methods.md`; the user adopted (a), B1 and B2 and
+rejected a blocked scheme for per-bin targets. Changing the evaluation after a
+result is itself a degree of freedom (split doc, route 4), so:
+- **no row, null, threshold, target or existing split was changed or removed**;
+  every change below adds something;
+- **the gate call rests on the confirmation set**
+  (`configs/runs/phase3_confirmation.yaml`: 10 sessions drawn with seed 1 from
+  the manifest minus the first table's 10, before any of this was built). The
+  first table's sessions are "seen" and are re-run for comparison only.
+
+**(a) `model_with_task`, and the gate moves to it.**
+- A new row: the model under test given its spike features **and** the
+  `null_trialstruct` features, on the same split, test samples and gapped
+  training CV (`SpikesAndTaskRidge` / `SpikesAndTaskLogistic`).
+- **Two penalties.** The task block's per-feature penalty is `ratio × λ`,
+  implemented by scaling the standardised task columns by 1/√ratio. The ratio
+  (10^-2 … 10^2, 5 values, `configs/baselines.yaml: with_task`) is chosen with
+  λ by the same training CV. Without it, one shared λ over ~100–400 spike
+  features and ~30 task features would make "adding spikes" look harmful for
+  fitting reasons.
+- **Both verdicts are printed**: `model vs null_trialstruct` (spikes alone vs
+  task, unchanged) and `model_with_task vs null_trialstruct` (does neural
+  activity add information beyond the task?).
+- **`GATE = (model_with_task, null_trialstruct)`** for every target, because
+  that is the question CLAUDE.md §5 and split-doc route 1 ask. Each report ends
+  with `GATE (...): PASSED / NOT PASSED`. Passing the spikes-alone verdict stays
+  the stronger, separately reported claim.
+
+**B1. Leave-one-block-out, block only** (`splits/registry.py`:
+`leave_one_block_out`; escalated per CLAUDE.md §10 and approved).
+- Blocks are runs of `probabilityLeft ∈ {0.2, 0.8}` among the session's trials;
+  the 90-trial unbiased start is in no block.
+- Each biased block is one fold's test set, from its first trial's start to its
+  last trial's end. Training is every earlier trial that ends at least `gap_s`
+  (2 s, as in the within-session split) of empty bins before the test block,
+  and every later trial that starts that far after it. Trials in the gaps are
+  in neither partition for that fold. The guard also requires the gap to be at
+  least the context window, and sample windows must lie inside their
+  partition's intervals.
+- Sessions need ≥ 4 biased blocks (`MIN_LOBO_BLOCKS`), otherwise the builder
+  raises.
+- The guard (`_check_session_folds`) checks per fold: no training interval
+  shares a bin with the test block, the gap holds, no trial is in both, and no
+  trial is tested twice.
+- The normaliser is fit per fold on that fold's training data only (R3),
+  hashed as `<split hash>#fold<k>`, and every fold's normaliser is saved
+  (`normalizers.json`).
+- Per-session metrics pool every fold's test predictions, so each block is
+  scored once and every session has both classes.
+- Refused for per-bin targets. Choice, wheel velocity and movement state stay
+  on the within-session split.
+- The split is its own kind with its own hash (`split_leave_one_block_out.json`,
+  recorded in the manifest); the within-session split file is unchanged.
+
+**B2. `null_pseudosession`, block only** (`evaluation/nulls.py`,
+`configs/nulls.yaml: null_pseudosession`).
+- 100 pseudo block sequences per session from a seeded port of brainbox's
+  `generate_pseudo_blocks`: 90 unbiased trials, then alternating blocks, first
+  side at random, lengths exponential(60) truncated to (20, 100). Seeds are
+  derived from the run seed and the eid.
+- The model is refit and scored on each, with the same pipeline, split and
+  neural data. The row is the per-session median, with its own
+  `model vs null_pseudosession` verdict. It sits beside `null_shuffle`, which is
+  unchanged.
+- Needs at least `MIN_PSEUDO` = 20 pseudo-sessions.
+- **Checked against the release:** block lengths from the port match the BWM
+  sessions' (KS p = 0.107). The test compares **distinct** sequences only: BWM
+  ephys sessions reuse pre-generated block sequences (18 distinct openings, 118
+  distinct full sequences), so the sessions' block lengths are not independent
+  draws, and a naive KS test rejects (p = 0.0001) for that reason alone.
+
+**Also:** the per-session baselines fit sessions in parallel
+(`configs/baselines.yaml: n_jobs: 6`) through `joblib`, which scikit-learn
+already installs and depends on; results are identical to sequential fitting
+(tested). Block LOBO with pseudo-sessions needs thousands of logistic fits per
+session.
+
+**Alternatives considered:**
+- Replacing or weakening `null_trialstruct`: ruled out.
+- B1 or B2 alone: B2 on the old split still scores on 1–4 test blocks, and B1
+  without B2 leaves slow drift to the circular shift.
+- A blocked within-session scheme for per-bin targets: not adopted.
+
+**Consequences:**
+- Reports now have up to eight rows: `null_pseudosession` for block,
+  `model_with_task` for every target.
+- `metrics.json` gains `gate`, `n_folds`, `n_pseudo` and `normalizer_hashes`
+  (a list, replacing `normalizer_hash`); the manifest gains
+  `split_leave_one_block_out_hash` and each target's split hash.
+- Both run configs gain `split.leave_one_block_out: [block]`.
+
 ### 2026-09-29 — Local app for non-programmers (Phase 8b)
 
 **Decision:** build a **local app**: a browser UI that runs on the user's own

@@ -54,6 +54,10 @@ def assert_split_valid(
         for eid in sorted(set().union(*split.partitions.values())):
             _check_session_blocks(split, eid, context_bins)
         return
+    if split.kind == "leave_one_block_out":
+        for eid in sorted(set().union(*split.partitions.values())):
+            _check_session_folds(split, eid, context_bins)
+        return
     pairs = list(combinations(split.partitions, 2))
     for a, b in pairs:
         shared = sorted(set(split.partitions[a]) & set(split.partitions[b]))
@@ -116,8 +120,7 @@ def _check_config(split: Split) -> None:
         cutoff = recomputed[s["lab"]]["train_from_units"]
         if not s["n_units"] >= cutoff:
             raise ValueError(
-                f"train session {eid} has {s['n_units']} units, under {s['lab']}'s "
-                f"cutoff {cutoff}"
+                f"train session {eid} has {s['n_units']} units, under {s['lab']}'s cutoff {cutoff}"
             )
 
 
@@ -144,7 +147,7 @@ def _check_partitions(split: Split) -> None:
     unknown = sorted(set(split.partitions) - set(PARTITIONS))
     if unknown or not {"train", "test"} <= set(split.partitions):
         raise ValueError(
-            f"partitions {sorted(split.partitions)}; need train and test, " f"and only {PARTITIONS}"
+            f"partitions {sorted(split.partitions)}; need train and test, and only {PARTITIONS}"
         )
     for name, eids in split.partitions.items():
         if not eids:
@@ -154,6 +157,46 @@ def _check_partitions(split: Split) -> None:
         missing = sorted(set(eids) - set(split.sessions))
         if missing:
             raise ValueError(f"partition {name} lists {missing[0]}, which has no session record")
+
+
+def _check_session_folds(split: Split, eid: str, context_bins: int) -> None:
+    """leave_one_block_out: per fold, the test block and each training interval share no
+    bin and sit at least max(context, 2 s) apart; trials lie inside their partition's
+    intervals and on one side only; across folds, a trial is tested at most once."""
+    record = split.sessions[eid]
+    bin_ms = split.preproc["bin_ms"]
+    need = max(context_bins, math.ceil(MIN_GAP_S * 1000 / bin_ms))
+    intervals = record["trial_intervals"]
+    tested: set[int] = set()
+    for k, fold in enumerate(record.get("folds", [])):
+        t0, t1 = bin_range(fold["blocks"]["test"], bin_ms)
+        for block in fold["blocks"]["train"]:
+            a0, a1 = bin_range(block, bin_ms)
+            if a0 <= t1 and t0 <= a1:
+                raise ValueError(
+                    f"{eid} fold {k}: a training interval shares bins with the test block"
+                )
+            gap = max(t0 - a1, a0 - t1) - 1
+            if gap < need:
+                raise ValueError(
+                    f"{eid} fold {k}: {gap} bins between a training interval and the test "
+                    f"block; the gap must be at least max(context {context_bins}, "
+                    f"{MIN_GAP_S} s) = {need} bins"
+                )
+        train, test = set(fold["trials"]["train"]), set(fold["trials"]["test"])
+        if train & test:
+            raise ValueError(f"{eid} fold {k}: trial {min(train & test)} is in both train and test")
+        if tested & test:
+            raise ValueError(f"{eid}: trial {min(tested & test)} is tested in more than one fold")
+        tested |= test
+        spans = {"train": fold["blocks"]["train"], "test": [fold["blocks"]["test"]]}
+        for partition, listed in fold["trials"].items():
+            for i in listed:
+                s0, s1 = intervals[i]
+                if not any(b0 <= s0 <= s1 <= b1 for b0, b1 in spans[partition]):
+                    raise ValueError(
+                        f"{eid} fold {k}: trial {i} is in {partition} but outside its intervals"
+                    )
 
 
 def _check_session_blocks(split: Split, eid: str, context_bins: int) -> None:

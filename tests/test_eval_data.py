@@ -22,6 +22,8 @@ from neurodecoder.models.baselines.features import load_baseline_config
 from neurodecoder.models.baselines.linear import (
     LogisticDecoder,
     RidgeDecoder,
+    SpikesAndTaskLogistic,
+    SpikesAndTaskRidge,
     TrialStructureLogistic,
     TrialStructureRidge,
 )
@@ -195,6 +197,7 @@ def test_the_contract_runs_end_to_end_on_the_provider(target):
         chunks = cfg.per_bin_chunks
         rows = dict(
             model=lambda: RidgeDecoder(chunks, cfg.cv),
+            model_with_task=lambda: SpikesAndTaskRidge(chunks, cfg.cv, ratios=(0.1, 10.0)),
             baseline_ridge=lambda: RidgeDecoder(chunks, cfg.cv),
             baseline_rrr=lambda: RRRRegression(chunks, cfg.cv),
             trialstruct=lambda: TrialStructureRidge(cfg.cv),
@@ -202,12 +205,15 @@ def test_the_contract_runs_end_to_end_on_the_provider(target):
     else:
         rows = dict(
             model=lambda: LogisticDecoder(cfg.trial_chunks, cfg.cv),
+            model_with_task=lambda: SpikesAndTaskLogistic(
+                cfg.trial_chunks, cfg.cv, ratios=(0.1, 10.0)
+            ),
             baseline_ridge=lambda: LogisticDecoder(cfg.trial_chunks, cfg.cv),
             baseline_rrr=lambda: RRRClassification(provider.context_bins, cfg.cv),
             trialstruct=lambda: TrialStructureLogistic(cfg.cv),
         )
     result = evaluate(provider, ceiling=None, seed=0, n_shifts=5, **rows)
-    assert tuple(result.summary().index)[-2:] == ("model", "ceiling_within")
+    assert tuple(result.summary().index)[-3:] == ("model", "model_with_task", "ceiling_within")
     assert result.ceiling_is_model and len(result.per_session["model"]) == len(EIDS)
 
 
@@ -244,3 +250,83 @@ def test_real_session_samples():
             d = provider.data(EID, partition)
             assert len(d.ends) > 0 and np.all(np.isfinite(d.y))
             assert d.z.shape[0] == 390 and len(d.units) == 390
+
+
+LOBO = __import__("neurodecoder.splits.registry", fromlist=["x"]).leave_one_block_out(
+    _manifest(), {e: SESSIONS[e].trials for e in EIDS}, PREPROC, gap_s=2.0
+)
+
+
+def test_leave_one_block_out_folds_serve_the_held_out_block():
+    provider = SplitData(LOBO, "block", load=SESSIONS.__getitem__)
+    folds = provider.folds()
+    assert len(folds) == 4 and provider.normalizer is None and len(provider.normalizers) == 4
+    table = provider._prepared["e0"].target.table
+    for k, fold in enumerate(folds):
+        record = LOBO.sessions["e0"]["folds"][k]
+        test = fold.data("e0", "test")
+        expected = table[table["trial"].isin(record["trials"]["test"])]
+        first, last = bin_range(record["blocks"]["test"], 20)
+        inside = (expected["end_bin"] - 14 >= first) & (expected["end_bin"] <= last)
+        np.testing.assert_array_equal(test.ends, expected["end_bin"][inside])
+        train = fold.data("e0", "train")
+        assert not set(train.ends) & set(test.ends) and len(train.ends) > 0
+        # The fold's normaliser uses its training intervals only.
+        assert provider.normalizers[k].split_hash.endswith(f"#fold{k}")
+
+
+def test_leave_one_block_out_is_refused_for_per_bin_targets_and_pseudo_for_choice():
+    with pytest.raises(ValueError, match="trial targets only"):
+        SplitData(LOBO, "wheel_velocity", context_bins=50, load=SESSIONS.__getitem__)
+    choice = SplitData(LOBO, "choice", load=SESSIONS.__getitem__)
+    assert not choice.pseudo_sessions
+    with pytest.raises(ValueError, match="no pseudo-sessions"):
+        choice.folds()[0].data("e0", "train", pseudo=1)
+    with pytest.raises(ValueError, match="through folds"):
+        choice.data("e0", "train")
+
+
+def test_the_contract_pools_leave_one_block_out_folds():
+    cfg = load_baseline_config()
+    provider = SplitData(LOBO, "block", load=SESSIONS.__getitem__)
+    provider.pseudo_sessions = False  # 40-trial fixtures are all inside IBL's 90 unbiased trials
+    rows = dict(
+        model=lambda: LogisticDecoder(cfg.trial_chunks, cfg.cv),
+        model_with_task=lambda: SpikesAndTaskLogistic(cfg.trial_chunks, cfg.cv, ratios=(0.1, 10.0)),
+        baseline_ridge=lambda: LogisticDecoder(cfg.trial_chunks, cfg.cv),
+        baseline_rrr=lambda: RRRClassification(provider.context_bins, cfg.cv),
+        trialstruct=lambda: TrialStructureLogistic(cfg.cv),
+    )
+    result = evaluate(provider, ceiling=None, seed=0, n_shifts=5, **rows)
+    assert result.n_folds == 4 and result.ceiling_is_model
+    # Every usable block trial whose window fits its fold is tested once, pooled per session.
+    n = result.per_session["model"]["n_samples"]
+    usable = {e: len(provider._prepared[e].target.table) for e in EIDS}
+    dropped = {
+        e: sum(v for (s, k), v in provider.dropped.items() if s == e and k.startswith("test"))
+        for e in EIDS
+    }
+    assert all(n[e] == usable[e] - dropped[e] for e in EIDS)
+
+
+@pytest.mark.skipif(
+    not (EPHYS.exists() and BEHAVIOUR.exists()), reason="BWM releases not available"
+)
+def test_real_pseudo_sessions_replace_block_labels_on_the_same_trials():
+    from neurodecoder.data.backends.bwm_compressed import load_session_bwm
+    from neurodecoder.data.manifest import build_manifest
+    from neurodecoder.evaluation.nulls import generate_pseudo_blocks
+    from neurodecoder.splits.registry import leave_one_block_out
+
+    session = load_session_bwm(EID, EPHYS, BEHAVIOUR)
+    split = leave_one_block_out(
+        build_manifest(EPHYS, BEHAVIOUR), {EID: session.trials}, PREPROC, gap_s=2.0
+    )
+    provider = SplitData(split, "block", load=lambda eid: session)
+    assert provider.pseudo_sessions and len(provider.folds()) == len(split.sessions[EID]["folds"])
+    fold = provider.folds()[1]
+    real, fake = fold.data(EID, "test"), fold.data(EID, "test", pseudo=7)
+    np.testing.assert_array_equal(real.ends, fake.ends)
+    prior = generate_pseudo_blocks(len(session.trials), seed=7)
+    trials = provider._prepared[EID].target.table.set_index("end_bin").loc[fake.ends, "trial"]
+    np.testing.assert_array_equal(fake.y, (prior[trials.to_numpy()] == 0.8).astype(float))

@@ -26,3 +26,15 @@ cv:
   log10_lambda_min: -4
   log10_lambda_max: 4
   n_lambdas: 17
+
+# model_with_task (adopted after the first table, see docs/DECISIONS.md): the model's
+# spike features plus the null_trialstruct features, with the task block's penalty a
+# multiple (ratio) of the spike block's. The ratio is chosen with lambda by the same
+# CV, from 10^log10_ratio_min to 10^log10_ratio_max.
+with_task:
+  log10_ratio_min: -2
+  log10_ratio_max: 2
+  n_ratios: 5
+
+# Sessions fitted in parallel by the per-session baselines (joblib processes).
+n_jobs: 6
