@@ -1,4 +1,4 @@
-runs/
+/runs/*
 external/
 __pycache__/
 *.pyc
@@ -6,4 +6,4 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
-!runs/.gitkeep
+!/runs/.gitkeep
