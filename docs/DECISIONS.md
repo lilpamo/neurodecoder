@@ -6,6 +6,49 @@ first.
 
 ---
 
+### 2026-09-29 — The data provider, trial-structure decoders, and a contract fix (`neurodecoder/evaluation/data.py`)
+
+**Decision:** `SplitData(split, target, context_bins=…)` is the real
+`DataProvider`. It prepares every session of the split once:
+- load it through the BWM backend;
+- apply unit QC and bin it (`preprocess_session`);
+- build the target (`targets/`);
+- fit one `Normalizer` on the split's training data.
+
+It keeps binned counts and targets, not spike trains, and normalises on each
+request (about 150 MB per session instead of about 500 MB). Preparing
+everything up front suits Phase 3's within-session split; Phase 4's
+cross-session runs over hundreds of sessions will need a lazier provider.
+
+- **Per-bin samples** (wheel velocity, movement state) are every window end in
+  the partition's span whose bin lies in the task period and has a defined
+  target. That's "task period, every bin" as the user chose.
+  - `train_stride` (default 1) thins training samples only. How dense movement
+    state's training should be is still the user's call.
+- **Trial samples** (choice, block) are the target's usable trials that the
+  split lists in the partition, at the target's own window. The context is
+  forced to match the window: 5 bins for choice, 15 for block.
+  - A trial whose window reaches outside the partition's span is dropped and
+    counted (`dropped`), never silently. In the fixture, that happens when
+    block's window starts before the train block does.
+- **Shifts:**
+  - shifted samples use the null's rotation (`evaluation.nulls`) at the same
+    ends; a bin whose rotated target is undefined is dropped;
+  - trial labels rotate over the session's usable trials before the partition
+    filter;
+  - `shifts()` draws within the task period (per-bin) or over the usable trials
+    (trial targets).
+- **`TrialStructureRidge` / `TrialStructureLogistic`** are the
+  `null_trialstruct` decoders. They're the per-session baselines fitted on
+  `task_features` only, with the same gapped CV; the contract hands them data
+  with `z = None`.
+- **Contract fix (from #22), found by the end-to-end test.** A shift draw that
+  no session could take crashed the contract. That happens whenever every
+  session is too short, e.g. choice with fewer than 200 usable trials. Such a
+  draw is now undefined: NaN for every session, and the verdict line says
+  "undefined, no test session has a defined null_shuffle" instead of claiming
+  the model failed to beat it.
+
 ### 2026-09-28 — Baselines: ridge/logistic and multi-session RRR (`neurodecoder/models/baselines/`, `configs/baselines.yaml`)
 
 **Decision (the user chose each option below before any code):**
