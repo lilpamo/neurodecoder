@@ -6,6 +6,56 @@ first.
 
 ---
 
+### 2026-09-28 — Baselines: ridge/logistic and multi-session RRR (`neurodecoder/models/baselines/`, `configs/baselines.yaml`)
+
+**Decision (the user chose each option below before any code):**
+
+| Choice | Setting |
+|---|---|
+| Per-bin inputs (wheel velocity, movement state) | each unit's summed activity in five 200 ms chunks of the last 1 s (context 50 bins) |
+| Trial inputs (choice, block) | each unit's count over the target's window (the Brain Wide Map decoders' input); RRR sees the window bin by bin |
+| Tuning | gapped blocked 5-fold CV inside the training data only: contiguous folds, with a max(context, 2 s) gap dropped either side of each validation fold; lowest mean validation MSE / log loss wins |
+| Scope | ridge/logistic and RRR; the Poisson GLM is deferred (not a contract row, and it's an encoding model) |
+
+- **Per-session models.** Ridge and logistic are fit per session: per-unit
+  weights don't transfer across sessions. Predicting a session the model wasn't
+  trained on raises, which is enough for Phase 3's within-session table. **Cross-session
+  baselines (e.g. region-pooled features) are a Phase 4 decision.**
+- **Penalty scale, corrected before any test metric existed.** The first grid
+  put α on sklearn's summed-loss scale, from 10⁻³ to 10⁵. On `d23a44ef`'s wheel
+  velocity, training-only CV picked 10⁵, the top edge; the CV optimum was 10⁶,
+  and the edge cost 24% in validation MSE. Features are now standardised on
+  the training data, and the penalty is per sample (mean loss + λ‖w‖²), with λ
+  from 10⁻⁴ to 10⁴ in 17 steps. So one λ means the same for 230 trials or 78k
+  bins. The same session now picks λ = 31.6, well inside.
+- **Edge flag:** a λ at either end of the grid is flagged in the model
+  (`at_grid_edge`), not silently kept.
+- **Ridge** solves every λ and fold from one Gram matrix per session (19 s on
+  `d23a44ef`'s 78,836 training bins with 1,950 features). It matches sklearn's
+  `Ridge` on standardised features.
+- **Logistic early stopping.** Logistic walks λ from strong to weak,
+  warm-started, and stops a fold once its validation loss has risen twice in a
+  row. The unreached weak end is where fits are slowest and never chosen; a λ
+  not reached by every fold can't be selected. Movement state on `d23a44ef` costs:
+  - 56 s using every 5th bin;
+  - 297 s using every bin, with λ = 0.32 either way.
+
+  **Open question for the first table:** with 20 shuffle refits of the model
+  under test, training on every bin costs ~2 h per session for movement state.
+- **RRR in two steps.** Session-specific unit weights U_s and shared temporal
+  filters V (weights U_s Vᵀ over unit × chunk):
+  1. per-session ridge on all features;
+  2. V = top-r right singular vectors of the stacked session weights;
+  3. U_s refit on X_s V (ridge, or logistic for classification) with the
+     session's step-1 λ.
+
+  The rank comes from {1, 2, 3} by the same folds (V re-estimated per fold), on
+  the mean over sessions of relative validation MSE (or log loss). Alternating
+  least squares with the same CV would cost hours on per-bin targets.
+- **RRR measured:** 64 s per session on wheel velocity. On `d23a44ef` plus one
+  other session it chose rank 1, with a filter weighted on the last 200–400 ms.
+  Synthetic tests check it recovers planted rank-1 and rank-2 shared filters.
+
 ### 2026-09-28 — The evaluation contract (`neurodecoder/evaluation/contract.py`)
 
 **Decision (the user chose each option below before any code):**
