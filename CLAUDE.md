@@ -28,7 +28,9 @@ recorded in `docs/DECISIONS.md`:
   competing on decoding accuracy at scale.
 - A spike-sorting pipeline. We consume sorted units only.
 - An LLM that predicts behaviour. See §6.
-- A web app. CLI first, for a long time.
+- A hosted web app. Analysis is CLI first. The one exception is the Phase 8b
+  local app, a browser UI on the user's own machine that only calls CLI entry
+  points; see "Local app for non-programmers (Phase 8b)" in `docs/DECISIONS.md`.
 - A general neuroscience analysis library. SpikeLab exists; prefer wrapping it
   over reimplementing it.
 
@@ -131,6 +133,8 @@ every numeral appears in the source artifacts. Do not disable it.
   decoding is almost always leakage.
 - Write down failed experiments in `docs/NEGATIVE_RESULTS.md`. They are the most
   valuable thing in this repo and the easiest to lose.
+- Every capability is a CLI entry point with structured JSON output; errors and
+  refusals are written for non-programmers.
 
 **Do not:**
 - Refactor validated preprocessing code while implementing something else.
