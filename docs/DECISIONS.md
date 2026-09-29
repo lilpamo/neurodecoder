@@ -6,6 +6,46 @@ first.
 
 ---
 
+### 2026-09-29 — Running the contract and logging runs (`neurodecoder/cli/evaluate.py`, `configs/runs/`)
+
+**Decision:** `python -m neurodecoder.cli.evaluate <run config>` runs the
+contract for each target in the config and logs the run under
+`runs/<UTC time>_<name>/` (CLAUDE.md §7).
+
+- **`manifest.json`** is written first with status "running" and updated after
+  each target. It records:
+  - the git SHA, branch and whether the tree was dirty, plus the command;
+  - the seed;
+  - every config file used (`run`, `qc`, `preprocess`, `targets`, `nulls`,
+    `evaluation`, `baselines`), with its sha256 and content;
+  - `PREPROC_VERSION`, the preprocessing and target fingerprints, the split
+    hash and the manifest provenance;
+  - the sessions, library versions and per-target timings.
+- **`split.json`** is the saved split.
+- **Per target** (`<target>/`):
+  - `report.txt` is the six-row table and verdicts;
+  - `metrics.json` (strict JSON, NaN → null) holds every per-session metric of
+    every row, the summary, the verdicts and any dropped trials. These are the
+    numbers any later report must trace back to (§6);
+  - `per_session.parquet` and `shuffle.parquet` hold the same numbers as tables.
+- The code is committed before a long run, so the recorded SHA reproduces it.
+
+**The first table's run config** (`configs/runs/phase3_first_table.yaml`;
+the user chose each option below before the run):
+- **Sessions:** NEDS's held-out test sessions that `bwm_ephys` 1.2.1 contains
+  (8 of 10; `f140a2ec` and `d04feec7` are not in the release), plus 2 drawn
+  at random with seed 0. So the table doubles as the base for the NEDS
+  comparison.
+- **Split:** within-session, 80% of trials train, with a 2 s gap.
+- **Targets:** choice, block, wheel velocity, movement state, in that order.
+- **Movement state trains on every 5th bin:** about 20 min per session with 20
+  shuffle refits, against about 2 h on every bin. Evaluation stays on every
+  task-period bin.
+- **The model row is the ridge/logistic baseline itself.** Phase 3's number is
+  the baseline's. `baseline_ridge` is therefore the same decoder, and each
+  report says that verdict is vacuous.
+- **20 shift draws**, as in `configs/nulls.yaml`.
+
 ### 2026-09-29 — The data provider, trial-structure decoders, and a contract fix (`neurodecoder/evaluation/data.py`)
 
 **Decision:** `SplitData(split, target, context_bins=…)` is the real
