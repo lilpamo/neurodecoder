@@ -136,6 +136,12 @@ contract for each target in the config and logs the run under
     every row, the summary, the verdicts and any dropped trials. These are the
     numbers any later report must trace back to (§6);
   - `per_session.parquet` and `shuffle.parquet` hold the same numbers as tables.
+  - `normalizer.json` (added after the first-table audit, R3) is the Normalizer
+    fit on the split's training data. It is saved with its hash, which is also
+    recorded in `metrics.json` and the manifest; `Normalizer.from_dict`
+    re-checks it on load. The first-table run predates it: its normaliser was
+    recomputed deterministically afterwards and saved as
+    `normalizer.backfilled.json`, marked as recomputed.
 - The code is committed before a long run, so the recorded SHA reproduces it.
 
 **The first table's run config** (`configs/runs/phase3_first_table.yaml`;
