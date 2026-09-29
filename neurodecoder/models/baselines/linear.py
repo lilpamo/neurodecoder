@@ -107,7 +107,7 @@ class _PerSession:
 
     def fit(self, train: Sequence[SessionData], *, seed: int) -> None:
         for data in train:
-            x = chunk_features(data, self.n_chunks)
+            x = self._features(data)
             y = np.asarray(data.y, dtype=np.float64)
             gap = gap_bins(data.context_bins, data.bin_ms)
             folds = gapped_folds(data.ends, data.context_bins, gap, self.cv.n_folds)
@@ -127,8 +127,11 @@ class _PerSession:
 
     def _linear(self, data: SessionData) -> np.ndarray:
         model = self._model(data)
-        x = chunk_features(data, self.n_chunks).astype(np.float64)
+        x = self._features(data).astype(np.float64)
         return x @ model.coef + model.intercept
+
+    def _features(self, data: SessionData) -> np.ndarray:
+        return chunk_features(data, self.n_chunks)
 
     def _fit_session(self, eid, x, y, folds, seed) -> SessionModel:
         raise NotImplementedError
@@ -203,3 +206,24 @@ class LogisticDecoder(_PerSession):
     def predict(self, data: SessionData) -> np.ndarray:
         # expit is overflow-safe.
         return expit(self._linear(data))
+
+
+class _TaskFeatures:
+    """Fits the task-variable features instead of spikes: the null_trialstruct row.
+
+    Reads data.task_features only; the contract passes this row's data with z = None.
+    """
+
+    def __init__(self, cv: CVConfig):
+        super().__init__(n_chunks=1, cv=cv)
+
+    def _features(self, data: SessionData) -> np.ndarray:
+        return np.asarray(data.task_features, dtype=np.float32)
+
+
+class TrialStructureRidge(_TaskFeatures, RidgeDecoder):
+    pass
+
+
+class TrialStructureLogistic(_TaskFeatures, LogisticDecoder):
+    pass

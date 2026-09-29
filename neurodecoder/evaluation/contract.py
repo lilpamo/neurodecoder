@@ -33,7 +33,14 @@ import numpy as np
 import pandas as pd
 from scipy.stats import wilcoxon
 
-from neurodecoder.evaluation.metrics import EvalConfig, load_eval_config, per_session, summarise
+from neurodecoder.evaluation.metrics import (
+    CLASSIFICATION,
+    REGRESSION,
+    EvalConfig,
+    load_eval_config,
+    per_session,
+    summarise,
+)
 from neurodecoder.evaluation.nulls import NullConfig, load_null_config
 from neurodecoder.splits.guards import assert_split_valid
 from neurodecoder.splits.registry import Split
@@ -148,6 +155,8 @@ class Verdict:
     n_sessions: int
 
     def line(self, metric: str) -> str:
+        if self.n_sessions == 0:
+            return f"model vs {self.row}: undefined, no test session has a defined {self.row}."
         detail = (
             f"median Δ{metric} {self.median_difference:+.3f}, wins {self.wins}/{self.n_sessions} "
             f"sessions, Wilcoxon p = {self.p_value:.3g}"
@@ -214,13 +223,24 @@ def _check_predictions(data: SessionData, prediction, kind: str) -> np.ndarray:
     return prediction
 
 
+def _undefined(kind: str, eids) -> pd.DataFrame:
+    metrics = CLASSIFICATION if kind == "classification" else REGRESSION
+    table = pd.DataFrame(np.nan, index=pd.Index(list(eids), name="eid"), columns=list(metrics))
+    return table.assign(n_samples=0)
+
+
 def _run(factory, provider, kind, eval_config, seed, shift_of=None, strip=False) -> pd.DataFrame:
     shift_of = shift_of or (lambda eid: None)
     decoder = factory()
     if decoder.kind != kind:
         raise ValueError(f"a {decoder.kind} decoder cannot fit a {kind} target")
     split = provider.split
-    decoder.fit(_Sessions(provider, split.partitions["train"], shift_of, strip), seed=seed)
+    train = _Sessions(provider, split.partitions["train"], shift_of, strip)
+    tested = [e for e in split.partitions["test"] if shift_of(e) is not _SKIP]
+    if not len(train) or not tested:
+        # No session has this shift draw (e.g. all too short): the row is undefined.
+        return _undefined(kind, split.partitions["test"])
+    decoder.fit(train, seed=seed)
     ys, predictions, eids = [], [], []
     for eid in split.partitions["test"]:
         shift = shift_of(eid)

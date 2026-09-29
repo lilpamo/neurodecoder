@@ -263,3 +263,14 @@ def test_few_sessions_never_count_as_beating():
     verdict = {v.row: v for v in result.verdicts}["null_trialstruct"]
     assert verdict.n_sessions == 4 and not verdict.beats
     assert "too few sessions" in str(result)
+
+
+def test_a_null_with_no_valid_session_is_undefined_not_failed():
+    class NoShifts(Provider):
+        def shifts(self, eid, n_shifts, *, seed):
+            return np.array([], dtype=np.int64)
+
+    result = _run(NoShifts(_cross_split()))
+    assert result.per_session["null_shuffle"]["r2"].isna().all()
+    assert "model vs null_shuffle: undefined" in str(result)
+    assert not {v.row: v for v in result.verdicts}["null_shuffle"].beats
