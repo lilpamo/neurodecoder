@@ -160,6 +160,7 @@ def test_unit_table_for_phy_data(tmp_path):
     assert table["region"].isna().all()
     assert table["label"].tolist()[:3] == ["good", "mua", "good"]
     assert table["qc_passed"].tolist() == [True, False, True, False]
+    assert (table["probe"] == "imec0").all() and table["lateral_um"].isna().all()
 
 
 # Real data: IBL's own Kilosort output for d23a44ef (probe00, pinned revision), written

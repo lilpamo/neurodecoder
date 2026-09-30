@@ -6,6 +6,49 @@ first.
 
 ---
 
+### 2026-09-30 — Atlas and 3D view, built (`analysis/atlas.py`, `data/atlas_meshes.py`, `studio/`)
+
+**What was built:**
+- **Region levels:** Allen, Beryl or Cosmos, default Beryl.
+- **Region tree:** counts per node, and selecting a node includes its
+  descendants.
+- **3D brain (three.js):** whole-brain and region meshes in Allen colours, the
+  units, both probe tracks, and the selected unit. Clicking a unit selects it.
+- **Probe strip:** region runs along the shank.
+- **Redesign:** a left rail, cards, and light and dark themes from the dataviz
+  reference palette. Plots use a single-hue blue ramp for magnitude, blue–grey–red
+  for signed values, and a muted event line.
+
+**Decisions:**
+- **Coordinates:** IBL xyz → CCF µm uses iblatlas's bregma landmark. A test checks
+  it against `AllenAtlas.xyz2ccf`.
+- **Real-data check:** all 398 d23a44ef units land in a voxel of their own Allen
+  region in the 25 µm annotation volume (`tests/test_atlas.py`).
+- **Meshes:** Allen's per-structure OBJ files, downloaded on first view into
+  `data_root/atlas/ccf_2017_meshes/` (the user approved the downloads). They are
+  written atomically and refused if the content isn't an OBJ. All three levels
+  for d23a44ef, plus the whole brain, came to 30 files and 27 MB.
+- **Volumes:** the Allen volumes for the test (`annotation_25.nrrd`,
+  `average_template_25.nrrd`, 37 MB) are in `data_root/atlas/`.
+- **Region runs on the probe strip** span recorded units only. They are not
+  histological boundaries, and the strip says so.
+- **Allen's root colour is white,** so the page draws it in muted ink.
+- **The page computes no numbers.** Regions, trees, positions, tracks and heatmap
+  row order all come from the API. Static files are served only from
+  `studio/static/`, which a test guards.
+
+**Finding:** at Beryl, 73 of the 390 QC-passing units are at `root`.
+- 24 are in fibre tracts: ml, alv, sptV, icp, arb.
+- 49 carry only a coarse parent label: MY 31, CB 17, TH 1.
+- At Cosmos only the 24 fibre-tract units remain at root.
+
+The tree shows these as "in no Beryl region" rather than dropping them. At Allen
+level, the coarse parents' meshes (CB, MY, TH) are large and dominate the 3D view.
+
+**Consequences:** CLAUDE.md §8's Studio line now names three.js. The Phy data has
+no positions or regions, so its 3D view, levels and tree are disabled, each with
+its reason.
+
 ### 2026-09-30 — Studio step added: Atlas and 3D view; three.js for the 3D brain
 
 **Decision (the user's):** a new step 2 in `docs/proposals/studio_next_steps.md`,
@@ -24,11 +67,13 @@ Responsiveness and the project file move to steps 3 and 4.
 a browser UI. It is MIT licensed, and it runs as an ES module with no build
 step, so §8's "plain page, no build step" holds. It will be kept in the repo as a
 local file rather than loaded from a CDN, because Studio is a local app that must
-work offline. It is not installed yet; this entry is updated with the version
-when it is.
+work offline. **Installed 2026-09-30:** r170 (npm `three@0.170.0`),
+`three.module.min.js`, `OrbitControls.js` and `OBJLoader.js`, with its MIT
+`LICENSE`, in `neurodecoder/studio/static/vendor/three/`.
 
-**Chart library:** none yet. It is decided at the start of the step and recorded
-here then; the step's plan gives the options.
+**Chart library: none.** Decided at the start of the step, following the plan's
+recommendation. Plots stay matplotlib PNGs. Heatmap rows are clickable and
+hoverable through a row→unit map the server sends with the image.
 
 **Consequences:**
 - The Allen CCF 2017 structure meshes are a new external data source. They are

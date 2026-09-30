@@ -4,125 +4,81 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Neurodecoder Studio</title>
-<style>
-  :root { --bg:#f7f7f5; --panel:#fff; --ink:#1d1d1f; --muted:#6b6b70; --line:#e2e2e0; --acc:#1f4fa0; --sel:#e6eefb; }
-  * { box-sizing:border-box; }
-  body { margin:0; font:13px/1.4 -apple-system, system-ui, sans-serif; color:var(--ink); background:var(--bg); }
-  header { padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel); display:flex; gap:16px; align-items:baseline; flex-wrap:wrap; }
-  header h1 { font-size:15px; margin:0; }
-  header .meta { color:var(--muted); }
-  main { display:grid; grid-template-columns:minmax(340px,420px) 1fr; gap:12px; padding:12px 16px; }
-  section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; }
-  .controls { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; margin-bottom:8px; }
-  .controls label { color:var(--muted); }
-  input[type=number] { width:64px; }
-  .table { max-height:calc(100vh - 190px); overflow:auto; }
-  table { border-collapse:collapse; width:100%; }
-  th, td { padding:3px 6px; text-align:left; border-bottom:1px solid var(--line); white-space:nowrap; }
-  th { position:sticky; top:0; background:var(--panel); color:var(--muted); font-weight:600; }
-  td.num { text-align:right; font-variant-numeric:tabular-nums; }
-  tr { cursor:pointer; } tr:hover td { background:#f1f1ef; } tr.sel td { background:var(--sel); }
-  .fail { color:#a33; }
-  .missing { color:var(--muted); }
-  .plots { display:grid; grid-template-columns:repeat(auto-fit,minmax(420px,1fr)); gap:12px; }
-  .plots img { width:100%; display:block; }
-  .err { color:#a33; white-space:pre-wrap; }
-  @media (max-width:900px) { main { grid-template-columns:1fr; } }
-</style>
+<link rel="stylesheet" href="/static/app.css">
+<script type="importmap">
+  { "imports": { "three": "/static/vendor/three/three.module.min.js" } }
+</script>
 </head>
 <body>
-<header><h1>Neurodecoder Studio</h1><span class="meta" id="meta">loading…</span></header>
-<main>
-  <section>
-    <div class="controls">
-      <label>Region <select id="region"><option value="">all</option></select></label>
-      <label><input type="checkbox" id="all"> show units failing QC</label>
-      <span class="meta" id="count"></span>
-    </div>
-    <div class="table"><table>
-      <thead><tr><th>unit</th><th>region</th><th>depth µm</th><th>rate Hz</th><th>QC label</th><th>QC</th></tr></thead>
-      <tbody id="rows"></tbody>
-    </table></div>
-  </section>
-  <section>
-    <div class="controls">
+<header class="topbar">
+  <div class="brand">Neurodecoder <span>Studio</span></div>
+  <div class="source" id="source">loading…</div>
+  <div class="spacer"></div>
+  <div class="seg" id="theme" role="group" aria-label="Theme">
+    <button data-v="auto" aria-pressed="true">Auto</button><button data-v="light">Light</button><button data-v="dark">Dark</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="rail">
+    <section>
+      <h2>Units</h2>
+      <label class="check"><input type="checkbox" id="all"> Include units failing QC</label>
+      <p class="note" id="counts"></p>
+    </section>
+    <section>
+      <h2>Region level</h2>
+      <div class="seg" id="level" role="group" aria-label="Region level"></div>
+      <p class="note" id="levelNote"></p>
+    </section>
+    <section class="grow">
+      <h2>Regions</h2>
+      <div class="tree" id="tree"></div>
+    </section>
+  </aside>
+
+  <main>
+    <div class="toolbar">
       <label>Event <select id="event"></select></label>
       <label>Window <input type="number" id="t0" value="-0.5" step="0.1"> to <input type="number" id="t1" value="1.0" step="0.1"> s</label>
       <label>Bin <input type="number" id="bin" value="0.02" step="0.005" min="0.001"> s</label>
-      <label><input type="checkbox" id="baseline"> subtract baseline
-        <input type="number" id="b0" value="-0.5" step="0.1"> to <input type="number" id="b1" value="0" step="0.1"> s</label>
+      <label class="check"><input type="checkbox" id="baseline"> Subtract baseline</label>
+      <label>from <input type="number" id="b0" value="-0.5" step="0.1"> to <input type="number" id="b1" value="0" step="0.1"> s</label>
     </div>
-    <div class="plots">
-      <div><img id="unitImg" alt="raster and PSTH"><div class="err" id="unitErr"></div></div>
-      <div><img id="popImg" alt="population heatmap"><div class="err" id="popErr"></div></div>
+
+    <div class="grid">
+      <section class="card area-table">
+        <header><h3>Units</h3><span class="meta" id="tableMeta"></span></header>
+        <div class="table"><table>
+          <thead><tr><th>Unit</th><th>Region</th><th class="num">Depth µm</th><th class="num">Rate Hz</th><th>Label</th><th>QC</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table></div>
+      </section>
+
+      <section class="card area-unit">
+        <header><h3>Selected unit</h3></header>
+        <p class="caption" id="unitCaption"></p>
+        <img id="unitImg" alt="Raster and PSTH of the selected unit">
+        <p class="err" id="unitErr"></p>
+      </section>
+
+      <section class="card area-pop">
+        <header><h3>Population</h3></header>
+        <p class="caption" id="popCaption"></p>
+        <div class="popwrap"><img id="popImg" alt="Population heatmap"><div class="tip" id="popTip" hidden></div></div>
+        <p class="err" id="popErr"></p>
+      </section>
+
+      <section class="card area-brain">
+        <header><h3>Brain</h3><span class="meta" id="brainMeta"></span></header>
+        <div class="brainrow">
+          <div class="brain" id="brain"><p class="note" id="brainNote"></p></div>
+          <div class="probe"><svg id="probe" role="img" aria-label="Probe strip"></svg></div>
+        </div>
+      </section>
     </div>
-  </section>
-</main>
-<script>
-const $ = id => document.getElementById(id);
-let data = null, unit = null;
-
-async function loadUnits() {
-  data = await (await fetch(`/api/units?all=${$('all').checked ? 1 : 0}`)).json();
-  $('meta').textContent = `session ${data.eid} · ${data.n_trials} trials · ${data.n_units_passing}/${data.n_units_total} units pass QC`;
-  if (!$('event').options.length)
-    for (const [k, v] of Object.entries(data.events)) $('event').add(new Option(v, k));
-  const keep = $('region').value;
-  $('region').length = 1;
-  for (const r of data.regions) $('region').add(new Option(r, r));
-  $('region').value = data.regions.includes(keep) ? keep : '';
-  const noRegion = data.missing['units.acronym'];
-  $('region').disabled = Boolean(noRegion);
-  $('region').title = noRegion || '';
-  renderTable();
-}
-
-// Missing values show as an em dash, never as a number.
-function fmt(v, digits) {
-  if (v === null || v === undefined) return '<span class="missing">—</span>';
-  return typeof v === 'number' ? v.toFixed(digits) : v;
-}
-
-function visible() { return data.units.filter(u => !$('region').value || u.region === $('region').value); }
-
-function renderTable() {
-  const rows = visible();
-  if (!rows.some(u => u.id === unit)) unit = rows.length ? rows[0].id : null;
-  $('count').textContent = `${rows.length} units`;
-  $('rows').innerHTML = rows.map(u => `<tr data-id="${u.id}" class="${u.id === unit ? 'sel' : ''}">
-    <td>${u.id}</td><td>${fmt(u.region)}</td><td class="num">${fmt(u.depth_um, 0)}</td>
-    <td class="num">${fmt(u.firing_rate_hz, 2)}</td><td class="num">${fmt(u.label, 2)}</td>
-    <td class="${u.qc_passed ? '' : 'fail'}" title="${u.qc_reason}">${u.qc_passed ? 'pass' : 'fail'}</td></tr>`).join('');
-  plot();
-}
-
-function query() {
-  const p = new URLSearchParams({ event: $('event').value, t0: $('t0').value, t1: $('t1').value, bin: $('bin').value,
-    baseline: $('baseline').checked ? 1 : 0, b0: $('b0').value, b1: $('b1').value,
-    region: $('region').value, all: $('all').checked ? 1 : 0 });
-  return p;
-}
-
-async function show(img, err, url) {
-  const r = await fetch(url);
-  if (!r.ok) { err.textContent = await r.text(); img.style.opacity = 0.25; return; }
-  err.textContent = ''; img.style.opacity = 1; img.src = URL.createObjectURL(await r.blob());
-}
-
-function plot() {
-  const q = query();
-  if (unit) { q.set('unit', unit); show($('unitImg'), $('unitErr'), '/api/unit.png?' + q); }
-  q.delete('unit'); show($('popImg'), $('popErr'), '/api/population.png?' + q);
-}
-
-$('rows').addEventListener('click', e => {
-  const tr = e.target.closest('tr'); if (!tr) return;
-  unit = tr.dataset.id; renderTable();
-});
-$('region').addEventListener('change', renderTable);
-$('all').addEventListener('change', loadUnits);
-for (const id of ['event', 't0', 't1', 'bin', 'baseline', 'b0', 'b1']) $(id).addEventListener('change', plot);
-loadUnits();
-</script>
+  </main>
+</div>
+<script type="module" src="/static/app.js"></script>
 </body>
 </html>

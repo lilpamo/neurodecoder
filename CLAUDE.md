@@ -182,7 +182,9 @@ config composition becomes painful).
 
 Studio UI: Python's standard-library `http.server`, plus one plain HTML and
 JavaScript page, with no build step. Plots are matplotlib PNGs rendered
-server-side. No web framework until a need is recorded in `docs/DECISIONS.md`.
+server-side. The 3D brain uses three.js, kept in the repo under
+`studio/static/vendor/`. No web framework or chart library until a need is
+recorded in `docs/DECISIONS.md`.
 
 Deliberately excluded until justified: Dask, Zarr, xarray, MLflow, W&B, napari,
 Plotly, Lightning. A `runs/` directory with JSON manifests is sufficient

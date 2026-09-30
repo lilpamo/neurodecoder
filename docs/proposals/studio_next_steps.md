@@ -25,7 +25,15 @@ Phy QC"):
 - **Opening data:** through server flags (`--phy FOLDER --events CSV`). The
   folder-picker question is still open.
 
-## 2. Atlas and 3D view, about 3–4 sessions
+## 2. Atlas and 3D view — built (2026-09-30)
+
+Built as planned below (`docs/DECISIONS.md`, "Atlas and 3D view, built"), with no
+chart library. Two things differ from the plan:
+- At Beryl, `root` also holds units that IBL labelled only with a coarse parent
+  region (MY, CB, TH), not just fibre tracts.
+- The probe strip's region runs span recorded units, so they are not histological
+  boundaries.
+
 
 **What:** where each unit is, at the region level the user picks, in a 3D brain
 and along the probe. Plus a visual redesign of the app.
