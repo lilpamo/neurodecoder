@@ -13,8 +13,8 @@ app for analysing data after spike sorting. You load sorted Neuropixels units pl
 task events, browse units, and run event-aligned and tuning analyses in a GUI, with
 strict statistics. Spike sorting and curation stay in existing tools (Kilosort,
 Phy). This reverses CLAUDE.md §2's "not a general neuroscience analysis library" and
-narrows §1's cross-animal reliability question to parked work. The CLAUDE.md edits
-are proposed in chat, not applied yet. First step: a prototype on branch
+narrows §1's cross-animal reliability question to parked work. CLAUDE.md §1–§3 and
+§5–§9 were updated to match, after the prototype. First step: a prototype on branch
 `studio-prototype`, from `phase3-gate-audit`.
 
 **Why:** Phase 3's gate did not pass on the confirmation set
