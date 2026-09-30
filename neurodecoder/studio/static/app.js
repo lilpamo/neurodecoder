@@ -5,7 +5,7 @@ import { OrbitControls } from '/static/vendor/three/OrbitControls.js';
 import { OBJLoader } from '/static/vendor/three/OBJLoader.js';
 
 const $ = (id) => document.getElementById(id);
-const state = { session: null, level: null, node: '', all: false, responsive: false, unit: null, rows: [], tree: [], popRows: null, box: null };
+const state = { session: null, level: null, node: '', all: false, responsive: false, probe: '', unit: null, rows: [], tree: [], popRows: null, box: null };
 
 // ---------- helpers ----------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -22,7 +22,7 @@ function params(extra = {}) {
   const p = new URLSearchParams({
     event: $('event').value, t0: $('t0').value, t1: $('t1').value, bin: $('bin').value,
     baseline: $('baseline').checked ? 1 : 0, b0: $('b0').value, b1: $('b1').value,
-    all: state.all ? 1 : 0, node: state.node, responsive: state.responsive ? 1 : 0, theme: theme(), ...extra,
+    all: state.all ? 1 : 0, node: state.node, probe: state.probe, responsive: state.responsive ? 1 : 0, theme: theme(), ...extra,
   });
   if (state.level) p.set('level', state.level);
   return p;
@@ -45,6 +45,7 @@ function setTheme(v) {
 }
 function redrawForTheme() {
   if (!state.session) return;  // nothing drawn yet
+  renderProbes();
   plotUnit(); plotPop(); renderProbe(); brain.theme();
 }
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
@@ -68,6 +69,8 @@ async function init() {
   $('all').checked = state.all = v.all;
   state.node = v.node || '';
   state.unit = v.unit;
+  state.probe = s.probes.includes(v.probe) ? v.probe : '';
+  renderProbes();
   state.level = noRegion ? null : (s.levels.includes(v.level) ? v.level : s.default_level);
   $('projectStatus').textContent = s.project.path ? `Project: ${s.project.path.split('/').pop()}` : '';
   $('projectStatus').title = s.project.path || '';
@@ -103,7 +106,7 @@ function currentView() {
     event: $('event').value, t0: +$('t0').value, t1: +$('t1').value, bin: +$('bin').value,
     baseline: $('baseline').checked, b0: +$('b0').value, b1: +$('b1').value,
     level: state.level || state.session.default_level, node: state.node,
-    all: state.all, responsive: state.responsive, unit: state.unit,
+    all: state.all, responsive: state.responsive, unit: state.unit, probe: state.probe,
   };
 }
 async function post(url, body) {
@@ -140,6 +143,16 @@ async function loadGeometry() {
   }
 }
 
+// ---------- rail: probe filter ----------
+// Colours come from the server, fixed by each probe's place in the session.
+function renderProbes() {
+  const s = state.session, colours = s.probe_colours[theme()];
+  const button = (value, label, colour) =>
+    `<button data-v="${esc(value)}" aria-pressed="${state.probe === value}">` +
+    (colour ? `<span class="sw" style="background:${colour}"></span>` : '') + `${esc(label)}</button>`;
+  $('probeFilter').innerHTML = button('', 'All probes') + s.probes.map((p) => button(p, p, colours[p])).join('');
+}
+
 // ---------- rail: responsiveness ----------
 function renderTest(t) {
   $('responsive').disabled = !t;
@@ -147,7 +160,8 @@ function renderTest(t) {
     $('testSummary').textContent = `Not run for ${$('event').selectedOptions[0]?.text || 'this event'}.`;
     return;
   }
-  $('testSummary').textContent = `${t.n_responsive} of ${t.n_tests} units responsive (${t.n_up} up, ${t.n_down} down) · ` +
+  const on = t.probes.length === 1 ? `probe ${t.probes[0]}` : `probes ${t.probes.join(', ')}`;
+  $('testSummary').textContent = `${t.n_responsive} of ${t.n_tests} units responsive on ${on} (${t.n_up} up, ${t.n_down} down) · ` +
     `${t.n_trials} trials${t.n_excluded ? `, ${t.n_excluded} without this event excluded` : ''} · ${t.n_shifts.toLocaleString()} shifts each`;
 }
 async function runTest() {
@@ -403,7 +417,7 @@ const brain = (() => {
       if (gen !== generation) return;
       regionGroup.clear();
       regionGroup.add(...regions);
-      note(`${g.meshes.length} ${state.level} regions · ${ids.length} units · ${g.tracks.length} probe tracks · drag to rotate, click a unit to select it`);
+      note(`${g.meshes.length} ${state.level} regions · ${ids.length} units · ${g.tracks.length} probe track${g.tracks.length === 1 ? '' : 's'} · drag to rotate, click a unit to select it`);
     } catch (e) {
       note(`Meshes unavailable: ${e.message}`);
     }
@@ -434,6 +448,15 @@ $('level').addEventListener('click', (e) => {
 });
 $('all').addEventListener('change', () => { state.all = $('all').checked; resetResponsive(); loadUnits(); loadGeometry(); });
 $('runTest').addEventListener('click', runTest);
+$('probeFilter').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || b.dataset.v === state.probe) return;
+  state.probe = b.dataset.v;
+  resetResponsive();  // a test belongs to the units it corrected over
+  renderProbes();
+  loadUnits();
+  loadGeometry();
+});
 $('save').addEventListener('click', () => act($('save'), 'Saving…', async () => {
   const d = await post('/api/project', currentView());
   $('projectStatus').title = d.path;

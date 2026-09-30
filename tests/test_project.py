@@ -103,3 +103,15 @@ def test_refuses_unknown_view_keys_and_newer_versions(tmp_path):
     path.write_text(json.dumps({**saved, "version": 99}))
     with pytest.raises(ValueError, match="version 99"):
         open_project(path)
+
+
+def test_older_projects_without_a_probe_open_on_all_probes(tmp_path):
+    from neurodecoder.studio.server import Studio
+
+    _, _, path = _saved(tmp_path)
+    saved = json.loads(path.read_text())
+    del saved["view"]["probe"]
+    path.write_text(json.dumps(saved))
+    project, session, qc, warnings = open_project(path)
+    assert warnings == []
+    assert Studio(session, qc, tmp_path, view=project["view"]).view["probe"] == ""

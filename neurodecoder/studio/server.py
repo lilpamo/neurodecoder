@@ -55,7 +55,7 @@ from neurodecoder.studio.project import (
     open_project,
     save_project,
 )
-from neurodecoder.viz.studio_plots import population_figure, unit_figure
+from neurodecoder.viz.studio_plots import THEMES, population_figure, probe_colours, unit_figure
 
 HERE = Path(__file__).parent
 STATIC = HERE / "static"
@@ -94,10 +94,15 @@ class Studio:
         self.has_regions = "units.acronym" in session.available.present
         self.has_positions = all(f"units.{a}" in session.available.present for a in "xyz")
         self.response_cfg = load_response_config()
-        self._tests: dict[tuple[str, bool], pd.DataFrame] = {}  # (event, all units) -> result
+        self.probes = sorted(self.units["probe"].unique())
+        # (event, all units, probe) -> result: BH ran over exactly that unit set.
+        self._tests: dict[tuple[str, bool, str], pd.DataFrame] = {}
+
+    def _test_key(self, q: dict) -> tuple[str, bool, str]:
+        return q.get("event", ""), q.get("all") == "1", q.get("probe", "")
 
     def _tested(self, q: dict) -> pd.DataFrame | None:
-        return self._tests.get((q.get("event", ""), q.get("all") == "1"))
+        return self._tests.get(self._test_key(q))
 
     def _level(self, q: dict) -> str:
         level = q.get("level", DEFAULT_LEVEL)
@@ -114,6 +119,10 @@ class Studio:
 
     def _select(self, q: dict) -> list[str]:
         keep = np.ones(len(self.units), bool) if q.get("all") == "1" else self.units["qc_passed"]
+        if q.get("probe"):
+            if q["probe"] not in self.probes:
+                raise ValueError(f"no probe {q['probe']!r} in this session; it has {self.probes}")
+            keep = keep & (self.units["probe"] == q["probe"])
         if q.get("node"):
             keep = keep & units_in_node(self._regions(q).to_numpy(), q["node"])
         if q.get("responsive") == "1":
@@ -141,6 +150,8 @@ class Studio:
             "default_level": DEFAULT_LEVEL,
             "missing": {k: v for k, v in missing.items() if k.startswith("units.")},
             "response": dict(self.response_cfg.__dict__),
+            "probes": self.probes,
+            "probe_colours": {theme: probe_colours(self.probes, theme) for theme in THEMES},
             "project": {
                 "path": None if self.project_path is None else str(self.project_path),
                 "view": self.view,
@@ -162,9 +173,11 @@ class Studio:
 
     def test_json(self, q: dict) -> dict:
         """Run (or reuse) the responsiveness test on every shown unit for one event."""
-        key = (q["event"], q.get("all") == "1")
+        key = self._test_key(q)
         if key not in self._tests:
-            ids = self._select({"all": q.get("all", "0")})
+            ids = self._select({"all": q.get("all", "0"), "probe": q.get("probe", "")})
+            if not ids:
+                raise ValueError("no units to test")
             events = event_times(self.session.trials, q["event"])
             self._tests[key] = responsiveness(self.session.spikes, ids, events, self.response_cfg)
         return self._summary(self._tests[key])
@@ -179,6 +192,7 @@ class Studio:
             "n_shifts": int(t["n_shifts"].iloc[0]),
             "n_trials": int(t["n_trials"].iloc[0]),
             "n_excluded": int(t["n_excluded"].iloc[0]),
+            "probes": sorted(self.units.loc[t.index, "probe"].unique()),
         }
 
     def units_json(self, q: dict) -> dict:
@@ -297,13 +311,18 @@ class Studio:
         mean, sem = selection_average(pop)
         edges = bin_edges(window, bin_width)
         which = "responsive " if q.get("responsive") == "1" else ""
+        rows = [ids[i] for i in order]
+        probes = self.units.loc[rows, "probe"].tolist()
+        included = sorted(set(probes))
         caption = (
             f"{len(ids)} {which}units ({q.get('node') or 'all regions'}) · "
+            f"{'probe' if len(included) == 1 else 'probes'} {', '.join(included)} · "
             f"{EVENTS[q['event']][0]} · sorted by peak time on odd trials (n = {sort_on.size}), "
             f"showing even trials (n = {show.size})"
         )
         return {
-            "units": [ids[i] for i in order],
+            "units": rows,
+            "probes": probes,
             "rates_hz": pop,
             "scaled": scale_rows_for_display(pop),
             "bin_centers": (edges[:-1] + edges[1:]) / 2,
@@ -318,8 +337,16 @@ class Studio:
 
     def population_png(self, q: dict) -> tuple[bytes, dict]:
         d = self.population_data(q)
+        theme = q.get("theme", "light")
         png, box = population_figure(
-            d["scaled"], d["bin_centers"], d["mean"], d["sem"], d["window"], q.get("theme", "light")
+            d["scaled"],
+            d["bin_centers"],
+            d["mean"],
+            d["sem"],
+            d["window"],
+            theme,
+            row_groups=d["probes"],
+            group_colours=probe_colours(self.probes, theme),
         )
         headers = {
             "X-Caption": quote(d["caption"]),

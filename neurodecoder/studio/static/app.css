@@ -114,3 +114,5 @@ td.resp { text-align: center; }
 .brand { white-space: nowrap; }
 .project .note { margin: 0; max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project .btn, .seg { flex: none; }
+.seg.probes { margin-top: 10px; flex-wrap: wrap; }
+.seg.probes button { display: inline-flex; align-items: center; gap: 5px; }

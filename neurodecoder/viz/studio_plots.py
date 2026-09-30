@@ -14,11 +14,33 @@ import os
 
 import numpy as np
 from matplotlib import rc_context
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, to_rgb
 from matplotlib.figure import Figure
+from matplotlib.patches import Patch
 
 from neurodecoder.analysis.psth import PSTH
 
+# The reference palette's categorical slots, in its fixed, CVD-validated order.
+_CATEGORICAL_LIGHT = [
+    "#2a78d6",
+    "#eb6834",
+    "#1baf7a",
+    "#eda100",
+    "#e87ba4",
+    "#008300",
+    "#4a3aa7",
+    "#e34948",
+]
+_CATEGORICAL_DARK = [
+    "#3987e5",
+    "#d95926",
+    "#199e70",
+    "#c98500",
+    "#d55181",
+    "#008300",
+    "#9085e9",
+    "#e66767",
+]
 _BLUE = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
 THEMES = {
     "light": {
@@ -30,6 +52,7 @@ THEMES = {
         "series": "#2a78d6",
         "sequential": _BLUE,
         "diverging": ["#184f95", "#6da7ec", "#f0efec", "#ec8a89", "#c22f2f"],
+        "categorical": _CATEGORICAL_LIGHT,
     },
     "dark": {
         "ink": "#ffffff",
@@ -41,6 +64,7 @@ THEMES = {
         # Near zero recedes into the dark surface; high values are bright.
         "sequential": _BLUE[::-1],
         "diverging": ["#6da7ec", "#256abf", "#383835", "#c22f2f", "#ec8a89"],
+        "categorical": _CATEGORICAL_DARK,
     },
 }
 _DPI = 110
@@ -50,6 +74,14 @@ def _theme(name: str) -> dict:
     if name not in THEMES:
         raise ValueError(f"unknown theme {name!r}")
     return THEMES[name]
+
+
+def probe_colours(probes: list[str], theme: str) -> dict[str, str]:
+    """probe -> colour by its place in the session's probe list, so filtering never
+    repaints a probe. Past the eighth probe, the rest share the muted ink ("other")."""
+    t = _theme(theme)
+    slots = t["categorical"]
+    return {p: slots[i] if i < len(slots) else t["muted"] for i, p in enumerate(probes)}
 
 
 def _style(ax, t: dict) -> None:
@@ -124,9 +156,9 @@ def unit_figure(trial, rel, p: PSTH, window, baseline: bool, theme: str) -> byte
     return _png(build_unit_figure(trial, rel, p, window, baseline, theme))
 
 
-def population_figure(scaled, centers, mean, sem, window, theme: str):
+def population_figure(scaled, centers, mean, sem, window, theme: str, **stripe):
     """build_population_figure as a PNG for the page, with the heatmap's box."""
-    fig, box = build_population_figure(scaled, centers, mean, sem, window, theme)
+    fig, box = build_population_figure(scaled, centers, mean, sem, window, theme, **stripe)
     return _png(fig), box
 
 
@@ -138,8 +170,13 @@ def build_population_figure(
     window,
     theme: str,
     title=None,
+    row_groups: list[str] | None = None,
+    group_colours: dict[str, str] | None = None,
 ) -> tuple[Figure, tuple[float, float, float, float]]:
     """Heatmap of row-scaled PSTHs, (n_units, n_bins) already sorted, and the selection mean.
+
+    row_groups (n_units,) and group_colours draw a stripe beside the rows (each row's
+    probe) with a legend naming every colour, so identity is never colour alone.
 
     Returns the figure and the heatmap's box (left, top, right, bottom) as fractions of
     the image, top-down, so row i spans top + (bottom - top) * [i, i + 1] / n_units.
@@ -153,7 +190,7 @@ def build_population_figure(
     add, squeeze = _frame(fig, title, t["ink2"])
     box = (0.13, 0.40, 0.72, 0.56)  # left, bottom, width, height
     ax_h = add(box)
-    cax = add((0.87, 0.40, 0.025, 0.56))
+    cax = add((0.885, 0.40, 0.022, 0.56))
     ax_m = add((0.13, 0.08, 0.72, 0.24), sharex=ax_h)
     im = ax_h.imshow(
         scaled,
@@ -170,6 +207,25 @@ def build_population_figure(
     cax.tick_params(colors=t["ink2"], labelsize=7, length=2)
     ax_h.set_ylabel("unit (sorted by peak time)")
     ax_h.tick_params(labelbottom=False)
+    if row_groups is not None:
+        assert len(row_groups) == scaled.shape[0]
+        ax_s = add((0.855, 0.40, 0.014, 0.56), sharey=ax_h)
+        rgb = np.array([to_rgb(group_colours[g]) for g in row_groups])[:, None, :]
+        ax_s.imshow(rgb, aspect="auto", interpolation="nearest", extent=(0, 1, len(rgb), 0))
+        ax_s.axis("off")
+        shown = [g for g in group_colours if g in set(row_groups)]
+        fig.legend(
+            handles=[Patch(color=group_colours[g], label=g) for g in shown],
+            loc="lower left",
+            bbox_to_anchor=(0.13, 0.335 * squeeze),
+            ncol=len(shown),
+            frameon=False,
+            fontsize=7,
+            labelcolor=t["ink2"],
+            handlelength=1,
+            handleheight=0.8,
+            columnspacing=1.2,
+        )
     ax_m.fill_between(centers, mean - sem, mean + sem, color=t["series"], alpha=0.2, lw=0)
     ax_m.plot(centers, mean, color=t["series"], lw=2)
     ax_m.set_ylabel("mean ± SEM (Hz)")

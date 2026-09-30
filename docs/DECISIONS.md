@@ -6,6 +6,36 @@ first.
 
 ---
 
+### 2026-09-30 — Probe filter in Studio
+
+**Decision (the user's):** a probe filter, All or one probe. It applies to:
+- the unit table and the region tree's counts;
+- the population heatmap and mean;
+- the 3D view (units, tracks and region meshes);
+- the probe strip;
+- the responsiveness test.
+
+**How:**
+- **One selection rule:** the filter is part of the server's unit selection, so
+  every view uses the same units.
+- **Testing:** results are keyed by (event, unit set, probe). Benjamini–Hochberg
+  runs over exactly the units tested on that probe. An all-probe result is a
+  separate test, never a subset of another. Changing probe clears the
+  responsive-only filter, as changing event does.
+- **Stripe colours:** a stripe beside the heatmap rows shows each row's probe,
+  using the dataviz palette's categorical slots in their fixed order. Each
+  probe's colour is set by its place in the session's probe list, so filtering
+  never repaints a probe. A legend names every colour. Past eight probes the rest
+  share the muted ink.
+- **Captions:** the population caption names the probes included. The test
+  summary names the probes tested.
+- **Projects and exports:** the probe is part of the saved view. Version 1 files
+  written before this open on all probes. The export's `population.json` lists
+  each row's probe.
+
+**Result (d23a44ef, First movement):** probe01 alone gives 241 of 277 units
+responsive (86 up, 155 down), with BH over 277 tests.
+
 ### 2026-09-30 — Project files and figure export (`studio/project.py`, `studio/export.py`)
 
 **Project file (`*.ndstudio.json`):**

@@ -26,7 +26,12 @@ from pathlib import Path
 import numpy as np
 
 from neurodecoder.studio.project import REPO, make_project, view_to_query
-from neurodecoder.viz.studio_plots import build_population_figure, build_unit_figure, save_vector
+from neurodecoder.viz.studio_plots import (
+    build_population_figure,
+    build_unit_figure,
+    probe_colours,
+    save_vector,
+)
 
 THEME = "light"
 
@@ -99,7 +104,15 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
 
     d = studio.population_data(q)
     fig, _ = build_population_figure(
-        d["scaled"], d["bin_centers"], d["mean"], d["sem"], d["window"], THEME, d["caption"]
+        d["scaled"],
+        d["bin_centers"],
+        d["mean"],
+        d["sem"],
+        d["window"],
+        THEME,
+        d["caption"],
+        row_groups=d["probes"],
+        group_colours=probe_colours(studio.probes, THEME),
     )
     for suffix in ("svg", "pdf"):
         save_vector(fig, out / f"population.{suffix}")

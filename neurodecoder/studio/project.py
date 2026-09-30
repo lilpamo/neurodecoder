@@ -57,6 +57,7 @@ DEFAULT_VIEW = {
     "all": False,
     "responsive": False,
     "unit": None,
+    "probe": "",  # "" is every probe; added after version 1 files, which open on all probes
 }
 
 
