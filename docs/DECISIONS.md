@@ -6,6 +6,64 @@ first.
 
 ---
 
+### 2026-09-30 — Responsiveness against a shift null (`analysis/responsiveness.py`, `configs/analysis.yaml`)
+
+**Decision:**
+- **Statistic, per unit and event:** the mean over trials of (rate in 0–300 ms −
+  rate in −200–0 ms), two-sided.
+- **Null:** the spike train circularly shifted against the event times. It keeps
+  the train's own timing and the events' spacing, and breaks their alignment.
+- **p** = (1 + #shifts with |statistic| ≥ |observed|) / (1 + #shifts).
+- **Correction:** Benjamini–Hochberg across the units tested together, α = 0.05.
+- **Reported with every result:** the windows, the number of shifts, the number
+  of tests and the trial counts.
+
+**Different from the plan:** the plan was 1,000 random shifts with a seed. That
+floors p at about 0.001, and with 390 units under BH it would need about 10,000
+shifts per unit. Instead, **every** circular shift on a grid is evaluated at
+once, by FFT cross-correlation. Shifts closer than `min_shift_s` = 10 s to zero,
+either way, are excluded.
+- **Deterministic:** no random draws and no seed, so R7 is satisfied trivially.
+- **Grid:** 5 ms, 456,801 shifts per unit on d23a44ef. On stimulus onset, 1 ms
+  gave 321 responsive units, 2 ms 322 and 5 ms 320. 5 ms runs in 11 s for 390
+  units, against 52 s at 1 ms.
+- The statistic is computed on that grid. A test checks it against direct
+  counting.
+- Units are processed 8 at a time, since each null has millions of values.
+
+**Checks:**
+- **Hand-computed case:** one spike after every event gives p = 1/(1 + n_shifts)
+  exactly.
+- **Calibration:** Poisson units with no event locking give uniform p (KS test).
+  BH rejects in at most 5 of 40 all-null datasets.
+- **Real-data negative control:** 410 random fake event times gave 0 of 390
+  units responsive for each of two seeds, and 15–16 with uncorrected p < 0.05
+  (about 4%).
+- **Cross-check:** a per-trial paired Wilcoxon signed-rank test with BH gives
+  328 of 390 at stimulus onset (shift null: 321 at 1 ms) and 175 at error
+  feedback (178).
+
+**Finding (d23a44ef, 390 QC-passing units, 5 ms grid):**
+- **Stimulus onset:** 320 of 390 responsive (154 up, 166 down).
+- **At 1 ms:** first movement 329, reward 311, error 178.
+
+That is a large fraction. The baseline window falls in IBL's enforced quiescence
+period, and movement follows within a few hundred ms, so "responsive to stimulus
+onset" includes movement-related change. The UI and captions say "rate changes
+around this event", never "responds to the stimulus". Phy-format probe00: 117 of
+200.
+
+**Cross-validated heatmap sorting:** the population heatmap is now sorted by peak
+time on odd trials and shows even trials, and its caption says so. This fixes
+the prototype's circularity. The diagonal persists on held-out trials at
+d23a44ef's stimulus onset.
+
+**Server:** now threaded (`ThreadingHTTPServer`), so an 11 s test doesn't freeze
+the plots. Figures use matplotlib's object API, with no shared pyplot state.
+
+**Not done:** the refractory-period metric for Phy QC, which the plan suggested
+considering. It is still open.
+
 ### 2026-09-30 — Atlas and 3D view, built (`analysis/atlas.py`, `data/atlas_meshes.py`, `studio/`)
 
 **What was built:**

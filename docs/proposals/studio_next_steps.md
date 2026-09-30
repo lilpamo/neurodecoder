@@ -108,7 +108,13 @@ hover or zoom.
   download.
 - **Track fit:** a straight probe gives a track through its sites.
 
-## 3. Responsiveness against a shuffle null (`analysis/responsiveness.py`), about 1–2 sessions
+## 3. Responsiveness against a shuffle null — built (2026-09-30)
+
+Built (`docs/DECISIONS.md`, "Responsiveness against a shift null"), with one change
+to the plan below: instead of 1,000 seeded random shifts, **every** circular shift
+on a 5 ms grid is evaluated by FFT, so the test is deterministic and p is not
+floored near 0.001. The refractory-period metric for Phy QC is still open.
+
 
 **What:** per unit and event, a p-value for "the rate in a response window
 differs from the rate in a baseline window".

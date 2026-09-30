@@ -5,7 +5,7 @@ import { OrbitControls } from '/static/vendor/three/OrbitControls.js';
 import { OBJLoader } from '/static/vendor/three/OBJLoader.js';
 
 const $ = (id) => document.getElementById(id);
-const state = { session: null, level: null, node: '', all: false, unit: null, rows: [], tree: [], popRows: null, box: null };
+const state = { session: null, level: null, node: '', all: false, responsive: false, unit: null, rows: [], tree: [], popRows: null, box: null };
 
 // ---------- helpers ----------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -22,7 +22,7 @@ function params(extra = {}) {
   const p = new URLSearchParams({
     event: $('event').value, t0: $('t0').value, t1: $('t1').value, bin: $('bin').value,
     baseline: $('baseline').checked ? 1 : 0, b0: $('b0').value, b1: $('b1').value,
-    all: state.all ? 1 : 0, node: state.node, theme: theme(), ...extra,
+    all: state.all ? 1 : 0, node: state.node, responsive: state.responsive ? 1 : 0, theme: theme(), ...extra,
   });
   if (state.level) p.set('level', state.level);
   return p;
@@ -65,6 +65,10 @@ async function init() {
     .map((l) => `<button data-v="${l}" aria-pressed="${l === state.level}" ${noRegion ? 'disabled' : ''}>${l}</button>`)
     .join('');
   $('levelNote').textContent = noRegion || '';
+  const r = s.response, ms = (w) => `${w[0] * 1000} to ${w[1] * 1000} ms`;
+  $('testWindows').textContent = `Response ${ms(r.response_window)} vs baseline ${ms(r.baseline_window)}, ` +
+    `two-sided, against every circular shift of each spike train (≥ ${r.min_shift_s} s). ` +
+    `Benjamini–Hochberg across the units tested, α = ${r.alpha}.`;
   await loadUnits();
   loadGeometry();
 }
@@ -73,6 +77,7 @@ async function loadUnits() {
   const d = await getJSON('/api/units?' + params());
   state.rows = d.units;
   state.tree = d.tree;
+  renderTest(d.test);
   if (!state.rows.some((u) => u.id === state.unit)) state.unit = state.rows.length ? state.rows[0].id : null;
   renderTree();
   renderTable();
@@ -88,6 +93,32 @@ async function loadGeometry() {
     brain.note(e.message);
   }
 }
+
+// ---------- rail: responsiveness ----------
+function renderTest(t) {
+  $('responsive').disabled = !t;
+  if (!t) {
+    $('testSummary').textContent = `Not run for ${$('event').selectedOptions[0]?.text || 'this event'}.`;
+    return;
+  }
+  $('testSummary').textContent = `${t.n_responsive} of ${t.n_tests} units responsive (${t.n_up} up, ${t.n_down} down) · ` +
+    `${t.n_trials} trials${t.n_excluded ? `, ${t.n_excluded} without this event excluded` : ''} · ${t.n_shifts.toLocaleString()} shifts each`;
+}
+async function runTest() {
+  const button = $('runTest');
+  button.disabled = true;
+  $('testSummary').textContent = 'Testing… about 10 s for 400 units.';
+  try {
+    await getJSON('/api/test?' + params({ responsive: 0 }));
+    await loadUnits();
+  } catch (e) {
+    $('testSummary').textContent = e.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+// A test belongs to one event and one unit set; changing either drops the filter.
+function resetResponsive() { state.responsive = false; $('responsive').checked = false; }
 
 // ---------- rail: region tree ----------
 function renderTree() {
@@ -120,9 +151,15 @@ function renderTable() {
         : `<span class="region" title="${esc(names[u.region_level] || '')} · Allen: ${esc(u.region)}"><span class="sw" style="background:${u.colour}"></span>${esc(u.region_level)}</span>`;
       return `<tr data-id="${esc(u.id)}" aria-selected="${u.id === state.unit}"><td>${esc(u.id)}</td><td>${region}</td>` +
         `<td class="num">${fmt(u.depth_um, 0)}</td><td class="num">${fmt(u.firing_rate_hz, 2)}</td><td>${fmt(u.label, 2)}</td>` +
-        `<td class="${u.qc_passed ? '' : 'fail'}" title="${esc(u.qc_reason)}">${u.qc_passed ? 'pass' : 'fail'}</td></tr>`;
+        `<td class="${u.qc_passed ? '' : 'fail'}" title="${esc(u.qc_reason)}">${u.qc_passed ? 'pass' : 'fail'}</td>` +
+        `<td class="resp" title="${respTitle(u)}">${{ up: '↑', down: '↓', no: '·' }[u.resp] || fmt(null)}</td></tr>`;
     })
     .join('');
+}
+
+function respTitle(u) {
+  if (!u.resp) return 'Not tested';
+  return `Δ = ${u.resp_hz.toFixed(2)} Hz, p = ${u.resp_p.toPrecision(2)}, q = ${u.resp_q.toPrecision(2)}`;
 }
 
 function selectUnit(id, { scroll = true } = {}) {
@@ -349,7 +386,10 @@ $('level').addEventListener('click', (e) => {
   loadUnits();
   loadGeometry();
 });
-$('all').addEventListener('change', () => { state.all = $('all').checked; loadUnits(); loadGeometry(); });
+$('all').addEventListener('change', () => { state.all = $('all').checked; resetResponsive(); loadUnits(); loadGeometry(); });
+$('runTest').addEventListener('click', runTest);
+$('responsive').addEventListener('change', () => { state.responsive = $('responsive').checked; loadUnits(); });
+$('event').addEventListener('change', () => { resetResponsive(); loadUnits(); });
 $('tree').addEventListener('click', (e) => {
   const n = e.target.closest('.node');
   if (!n) return;
@@ -358,7 +398,7 @@ $('tree').addEventListener('click', (e) => {
 });
 $('rows').addEventListener('click', (e) => { const tr = e.target.closest('tr'); if (tr) selectUnit(tr.dataset.id); });
 $('probe').addEventListener('click', (e) => { const c = e.target.closest('circle'); if (c) selectUnit(c.dataset.id); });
-for (const id of ['event', 't0', 't1', 'bin', 'baseline', 'b0', 'b1']) $(id).addEventListener('change', () => { plotUnit(); plotPop(); });
+for (const id of ['t0', 't1', 'bin', 'baseline', 'b0', 'b1']) $(id).addEventListener('change', () => { plotUnit(); plotPop(); });
 $('popImg').addEventListener('mousemove', (e) => {
   const hit = popRowAt(e), tip = $('popTip');
   tip.hidden = !hit;

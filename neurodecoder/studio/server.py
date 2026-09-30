@@ -12,7 +12,7 @@ import argparse
 import json
 import mimetypes
 import re
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -32,6 +32,7 @@ from neurodecoder.analysis.atlas import (
 )
 from neurodecoder.analysis.events import EVENTS, available_events, event_times
 from neurodecoder.analysis.psth import (
+    alternate_halves,
     bin_edges,
     peak_order,
     population_psth,
@@ -40,6 +41,7 @@ from neurodecoder.analysis.psth import (
     scale_rows_for_display,
     selection_average,
 )
+from neurodecoder.analysis.responsiveness import load_response_config, responsiveness
 from neurodecoder.analysis.units import unit_table
 from neurodecoder.data.atlas_meshes import mesh_path
 from neurodecoder.data.backends.phy import load_session_phy
@@ -67,6 +69,11 @@ class Studio:
         self.atlas_root = atlas_root
         self.has_regions = "units.acronym" in session.available.present
         self.has_positions = all(f"units.{a}" in session.available.present for a in "xyz")
+        self.response_cfg = load_response_config()
+        self._tests: dict[tuple[str, bool], pd.DataFrame] = {}  # (event, all units) -> result
+
+    def _tested(self, q: dict) -> pd.DataFrame | None:
+        return self._tests.get((q.get("event", ""), q.get("all") == "1"))
 
     def _level(self, q: dict) -> str:
         level = q.get("level", DEFAULT_LEVEL)
@@ -85,6 +92,11 @@ class Studio:
         keep = np.ones(len(self.units), bool) if q.get("all") == "1" else self.units["qc_passed"]
         if q.get("node"):
             keep = keep & units_in_node(self._regions(q).to_numpy(), q["node"])
+        if q.get("responsive") == "1":
+            tested = self._tested(q)
+            if tested is None:
+                raise ValueError("run the responsiveness test for this event first")
+            keep = keep & self.units.index.isin(tested.index[tested["responsive"]])
         return list(self.units.index[np.asarray(keep, bool)])
 
     def _params(self, q: dict):
@@ -104,6 +116,28 @@ class Studio:
             "levels": list(LEVELS),
             "default_level": DEFAULT_LEVEL,
             "missing": {k: v for k, v in missing.items() if k.startswith("units.")},
+            "response": dict(self.response_cfg.__dict__),
+        }
+
+    def test_json(self, q: dict) -> dict:
+        """Run (or reuse) the responsiveness test on every shown unit for one event."""
+        key = (q["event"], q.get("all") == "1")
+        if key not in self._tests:
+            ids = self._select({"all": q.get("all", "0")})
+            events = event_times(self.session.trials, q["event"])
+            self._tests[key] = responsiveness(self.session.spikes, ids, events, self.response_cfg)
+        return self._summary(self._tests[key])
+
+    def _summary(self, t: pd.DataFrame) -> dict:
+        up = t["responsive"] & (t["statistic_hz"] > 0)
+        return {
+            "n_tests": int(t["n_tests"].iloc[0]),
+            "n_responsive": int(t["responsive"].sum()),
+            "n_up": int(up.sum()),
+            "n_down": int((t["responsive"] & ~up).sum()),
+            "n_shifts": int(t["n_shifts"].iloc[0]),
+            "n_trials": int(t["n_trials"].iloc[0]),
+            "n_excluded": int(t["n_excluded"].iloc[0]),
         }
 
     def units_json(self, q: dict) -> dict:
@@ -117,10 +151,22 @@ class Studio:
             colour=[info.get(r, {}).get("colour") for r in regions[shown.index]],
         )
         tree = region_tree(regions[everywhere].to_numpy()) if self.has_regions else []
+        tested = self._tested(q)
+        if tested is not None:
+            t = tested.reindex(rows.index)  # every shown unit was tested together
+            tested_here = t["responsive"].notna()
+            responsive = t["responsive"].where(tested_here, False).astype(bool)
+            verdict = np.select(
+                [~tested_here, ~responsive, t["statistic_hz"] > 0], [None, "no", "up"], "down"
+            )
+            rows = rows.assign(
+                resp_q=t["q"], resp_p=t["p"], resp_hz=t["statistic_hz"], resp=verdict
+            )
         return {
             "level": self._level(q) if self.has_regions else None,
             "units": _records(rows.reset_index().rename(columns={"unit_id": "id"})),
             "tree": tree,
+            "test": None if tested is None else self._summary(tested),
         }
 
     def probe_json(self, q: dict) -> dict:
@@ -184,8 +230,13 @@ class Studio:
         ids = self._select(q)
         if not ids:
             raise ValueError("no units match this filter")
-        pop = population_psth(self.session.spikes, ids, events, window, bin_width, baseline)
-        order = peak_order(pop)
+        # Sort on odd trials and show even ones, so the order is not fitted to what it shows.
+        sort_on, show = alternate_halves(events)
+        if show.size == 0:
+            raise ValueError("needs at least 2 trials with this event: one half sorts, one shows")
+        spikes = self.session.spikes
+        order = peak_order(population_psth(spikes, ids, sort_on, window, bin_width, baseline))
+        pop = population_psth(spikes, ids, show, window, bin_width, baseline)
         mean, sem = selection_average(pop)
         edges = bin_edges(window, bin_width)
         png, box = population_figure(
@@ -196,10 +247,11 @@ class Studio:
             window,
             q.get("theme", "light"),
         )
+        which = "responsive " if q.get("responsive") == "1" else ""
         caption = (
-            f"{len(ids)} units ({q.get('node') or 'all regions'}) · "
-            f"{EVENTS[q['event']][0]} · n = {int(np.isfinite(events).sum())} trials · "
-            "sorted by peak time on these same trials"
+            f"{len(ids)} {which}units ({q.get('node') or 'all regions'}) · "
+            f"{EVENTS[q['event']][0]} · sorted by peak time on odd trials (n = {sort_on.size}), "
+            f"showing even trials (n = {show.size})"
         )
         headers = {
             "X-Caption": quote(caption),
@@ -227,6 +279,7 @@ def make_handler(studio: Studio):
         "/api/units": ("application/json", as_json(studio.units_json)),
         "/api/probe": ("application/json", as_json(studio.probe_json)),
         "/api/geometry": ("application/json", as_json(studio.geometry_json)),
+        "/api/test": ("application/json", as_json(studio.test_json)),
         "/api/unit.png": ("image/png", studio.unit_png),
         "/api/population.png": ("image/png", studio.population_png),
         "/": ("text/html; charset=utf-8", lambda q: ((HERE / "index.html").read_bytes(), {})),
@@ -283,7 +336,8 @@ def main() -> None:
         session, qc = load_session(args.eid, args.backend), load_qc_config()
     studio = Studio(session, qc, atlas_root)
     print(f"Neurodecoder Studio: http://127.0.0.1:{args.port}  ({session.eid})", flush=True)
-    HTTPServer(("127.0.0.1", args.port), make_handler(studio)).serve_forever()
+    # Threads, so a long responsiveness test doesn't hold up the plots.
+    ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(studio)).serve_forever()
 
 
 if __name__ == "__main__":

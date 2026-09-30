@@ -27,6 +27,13 @@
       <p class="note" id="counts"></p>
     </section>
     <section>
+      <h2>Responsiveness</h2>
+      <p class="note" id="testWindows"></p>
+      <button class="btn" id="runTest">Test shown units</button>
+      <p class="note" id="testSummary"></p>
+      <label class="check"><input type="checkbox" id="responsive" disabled> Responsive only</label>
+    </section>
+    <section>
       <h2>Region level</h2>
       <div class="seg" id="level" role="group" aria-label="Region level"></div>
       <p class="note" id="levelNote"></p>
@@ -50,7 +57,7 @@
       <section class="card area-table">
         <header><h3>Units</h3><span class="meta" id="tableMeta"></span></header>
         <div class="table"><table>
-          <thead><tr><th>Unit</th><th>Region</th><th class="num">Depth µm</th><th class="num">Rate Hz</th><th>Label</th><th>QC</th></tr></thead>
+          <thead><tr><th>Unit</th><th>Region</th><th class="num">Depth µm</th><th class="num">Rate Hz</th><th>Label</th><th>QC</th><th title="Responsive to this event (q &lt; alpha)">Resp.</th></tr></thead>
           <tbody id="rows"></tbody>
         </table></div>
       </section>

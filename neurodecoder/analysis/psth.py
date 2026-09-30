@@ -144,3 +144,13 @@ def scale_rows_for_display(matrix: np.ndarray) -> np.ndarray:
     assert matrix.ndim == 2
     peak = np.abs(matrix).max(axis=1, keepdims=True)
     return np.divide(matrix, peak, out=np.zeros_like(matrix, dtype=np.float64), where=peak > 0)
+
+
+def alternate_halves(events: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Trials with an event time, split alternately: (1st, 3rd, ...) and (2nd, 4th, ...).
+
+    For sorting a heatmap on one half and showing the other, so the order is not fitted
+    to the data it displays.
+    """
+    valid = _valid(events)
+    return valid[0::2], valid[1::2]

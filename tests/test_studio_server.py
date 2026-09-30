@@ -1,8 +1,10 @@
 from urllib.parse import unquote
 
 import pandas as pd
+import pytest
 from phy_folder import write_phy_folder
 
+from neurodecoder.analysis.responsiveness import ResponseConfig
 from neurodecoder.data.backends.phy import load_session_phy
 from neurodecoder.qc.phy import PhyUnitQC
 from neurodecoder.studio.server import Studio, _static
@@ -50,11 +52,27 @@ def test_population_headers_map_heatmap_rows_to_units(tmp_path):
     assert sorted(headers["X-Rows"].split(",")) == ["imec0_11", "imec0_3", "imec0_7", "imec0_9"]
     left, top, right, bottom = map(float, headers["X-Box"].split(","))
     assert 0 <= left < right <= 1 and 0 <= top < bottom <= 1
-    assert unquote(headers["X-Caption"]).startswith(
-        "4 units (all regions) · Stimulus onset · n = 2"
+    assert unquote(headers["X-Caption"]) == (
+        "4 units (all regions) · Stimulus onset · sorted by peak time on odd trials (n = 1), "
+        "showing even trials (n = 1)"
     )
 
 
 def test_unit_caption_has_no_region_when_there_is_none(tmp_path):
     _, headers = _studio(tmp_path).unit_png({**PLOT, "unit": "imec0_3"})
     assert unquote(headers["X-Caption"]) == "imec0_3 · Stimulus onset · n = 2 trials"
+
+
+def test_responsiveness_runs_once_per_event_and_feeds_the_table(tmp_path):
+    studio = _studio(tmp_path)
+    # The hand-built session is 3 s long: shrink the null's minimum shift to fit it.
+    studio.response_cfg = ResponseConfig((-0.2, 0.0), (0.0, 0.3), 0.001, 0.5, 0.05)
+    q = {"event": "stim_on", "all": "1"}
+    with pytest.raises(ValueError, match="run the responsiveness test"):
+        studio.units_json({**q, "responsive": "1"})
+    summary = studio.test_json(q)
+    assert summary["n_tests"] == 4 and summary["n_trials"] == 2
+    rows = studio.units_json(q)["units"]
+    assert {r["resp"] for r in rows} <= {"up", "down", "no"}
+    assert all(0 < r["resp_p"] <= 1 for r in rows)
+    assert studio.test_json(q) == summary  # cached, not rerun
