@@ -60,7 +60,18 @@ async function init() {
   $('counts').textContent = `${s.n_units_passing} of ${s.n_units_total} units pass QC · ${s.n_trials} trials`;
   for (const [k, v] of Object.entries(s.events)) $('event').add(new Option(v, k));
   const noRegion = s.missing['units.acronym'];
-  state.level = noRegion ? null : s.default_level;
+  // Start from the project's saved view: settings only; every number is recomputed.
+  const v = s.project.view;
+  if (s.events[v.event]) $('event').value = v.event;
+  for (const k of ['t0', 't1', 'bin', 'b0', 'b1']) $(k).value = v[k];
+  $('baseline').checked = v.baseline;
+  $('all').checked = state.all = v.all;
+  state.node = v.node || '';
+  state.unit = v.unit;
+  state.level = noRegion ? null : (s.levels.includes(v.level) ? v.level : s.default_level);
+  $('projectStatus').textContent = s.project.path ? `Project: ${s.project.path.split('/').pop()}` : '';
+  $('projectStatus').title = s.project.path || '';
+  renderWarnings(s.project.warnings);
   $('level').innerHTML = s.levels
     .map((l) => `<button data-v="${l}" aria-pressed="${l === state.level}" ${noRegion ? 'disabled' : ''}>${l}</button>`)
     .join('');
@@ -70,7 +81,42 @@ async function init() {
     `two-sided, against every circular shift of each spike train (≥ ${r.min_shift_s} s). ` +
     `Benjamini–Hochberg across the units tested, α = ${r.alpha}.`;
   await loadUnits();
+  if (v.responsive) {  // results are never saved: rerun the test the view relied on
+    await runTest();
+    state.responsive = $('responsive').checked = true;
+    await loadUnits();
+  }
   loadGeometry();
+}
+
+function renderWarnings(list) {
+  const el = $('warnings');
+  el.hidden = !list.length;
+  el.innerHTML = list.length
+    ? `<strong>⚠ Changed since this project was saved</strong><ul>${list.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>`
+    : '';
+}
+
+// ---------- project and export ----------
+function currentView() {
+  return {
+    event: $('event').value, t0: +$('t0').value, t1: +$('t1').value, bin: +$('bin').value,
+    baseline: $('baseline').checked, b0: +$('b0').value, b1: +$('b1').value,
+    level: state.level || state.session.default_level, node: state.node,
+    all: state.all, responsive: state.responsive, unit: state.unit,
+  };
+}
+async function post(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function act(button, busy, work) {
+  button.disabled = true;
+  $('projectStatus').textContent = busy;
+  try { $('projectStatus').textContent = await work(); }
+  catch (e) { $('projectStatus').textContent = e.message; }
+  finally { button.disabled = false; }
 }
 
 async function loadUnits() {
@@ -388,6 +434,16 @@ $('level').addEventListener('click', (e) => {
 });
 $('all').addEventListener('change', () => { state.all = $('all').checked; resetResponsive(); loadUnits(); loadGeometry(); });
 $('runTest').addEventListener('click', runTest);
+$('save').addEventListener('click', () => act($('save'), 'Saving…', async () => {
+  const d = await post('/api/project', currentView());
+  $('projectStatus').title = d.path;
+  return `Saved ${d.path.split('/').pop()} at ${new Date().toLocaleTimeString()}`;
+}));
+$('export').addEventListener('click', () => act($('export'), 'Exporting…', async () => {
+  const d = await post('/api/export', currentView());
+  $('projectStatus').title = d.folder;
+  return `Exported ${d.files.length} files to runs/${d.folder.split('/').pop()}`;
+}));
 $('responsive').addEventListener('change', () => { state.responsive = $('responsive').checked; loadUnits(); });
 $('event').addEventListener('change', () => { resetResponsive(); loadUnits(); });
 $('tree').addEventListener('click', (e) => {

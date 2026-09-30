@@ -6,6 +6,65 @@ first.
 
 ---
 
+### 2026-09-30 — Project files and figure export (`studio/project.py`, `studio/export.py`)
+
+**Project file (`*.ndstudio.json`):**
+- **What it holds:**
+  - the data source (an IBL eid and backend with its release, or a Phy folder
+    plus events CSV);
+  - the sha256 of each Phy file that changes what Studio shows, and of the
+    events CSV;
+  - a fingerprint of the loaded Session (every spike train, the units and
+    trials tables);
+  - the QC and analysis config hashes;
+  - the view: event, window, bin, baseline, level, node, filters, unit.
+- **No results.** Opening a project reloads and recomputes everything.
+- **What changed is named, not blocked.** "`events.csv` changed", "`cluster_group.tsv`
+  is new", "the loaded data differ", "`configs/qc.yaml` changed". These appear in
+  a banner and on the console.
+- A view that relied on the responsiveness filter reruns the test on opening,
+  because results are never stored.
+- **Writing:** saves are atomic, and the file name must end in `.ndstudio.json`.
+
+**Where projects go:**
+- `--project FILE` alone opens a project.
+- With `--eid` or `--phy`, it starts a new one there. It refuses if FILE exists.
+- Without `--project`, Save writes to `data_root/projects/<name>.ndstudio.json`,
+  numbered so nothing is overwritten.
+
+This settles step 1's open folder-picker question for now: paths come from the
+command line, not a dialog.
+
+**Figure export:**
+- **Destination:** each export is a new `runs/<UTC time>_studio/` folder
+  (`runs/` is gitignored, as §7 expects).
+- **Figures:** `unit` and `population` as SVG and PDF, drawn by the same viz/
+  builders as the page. They use the light theme at a fixed size, are titled
+  with the page caption, and keep text editable (`svg.fonttype none`,
+  `pdf.fonttype 42`).
+- **Sidecars:** a JSON file beside each figure holds every array it was drawn
+  from: bin centres, mean, SEM, trial counts, raster times, unit order, rates and
+  scaled rows. Tests check the sidecars equal the engine's output.
+- **`responsiveness.csv`** is included when the test ran for that event.
+- **`manifest.json`:** git SHA and dirty flag, the project snapshot, the view,
+  the responsiveness config, the software versions, and `seed: null` (nothing
+  random).
+
+**Safety:** the two write endpoints (`POST /api/project`, `/api/export`) accept
+only `application/json` from the page's own origin. A cross-site page can't
+trigger them, and a test covers both refusals.
+
+**Duplication, knowingly:** `_git` and `_jsonable` are small copies of those in
+`cli/evaluate.py`. Importing them would pull the evaluation stack into Studio, and
+moving them into a shared module means refactoring validated code outside this
+step.
+
+**Checked on real data:**
+- **Save and reopen:** saving d23a44ef at First movement / CA1 / `probe00_433`
+  and reopening restored the view with no warnings.
+- **A changed file:** a Phy project whose events copy lost its last trial
+  reopened with both warnings, and with 409 trials recomputed.
+
 ### 2026-09-30 — Responsiveness against a shift null (`analysis/responsiveness.py`, `configs/analysis.yaml`)
 
 **Decision:**

@@ -14,10 +14,16 @@
   <div class="brand">Neurodecoder <span>Studio</span></div>
   <div class="source" id="source">loading…</div>
   <div class="spacer"></div>
+  <div class="project">
+    <span class="note" id="projectStatus"></span>
+    <button class="btn" id="save" title="Save the data source, file hashes and these settings (no results)">Save project</button>
+    <button class="btn" id="export" title="Write SVG and PDF figures with their numbers to runs/">Export figures</button>
+  </div>
   <div class="seg" id="theme" role="group" aria-label="Theme">
     <button data-v="auto" aria-pressed="true">Auto</button><button data-v="light">Light</button><button data-v="dark">Dark</button>
   </div>
 </header>
+<div class="banner" id="warnings" role="alert" hidden></div>
 
 <div class="shell">
   <aside class="rail">

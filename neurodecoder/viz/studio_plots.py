@@ -10,8 +10,10 @@ Uses matplotlib's object API (no pyplot state), so figures are independent.
 """
 
 import io
+import os
 
 import numpy as np
+from matplotlib import rc_context
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 
@@ -69,12 +71,35 @@ def _png(fig: Figure) -> bytes:
     return buf.getvalue()
 
 
-def unit_figure(trial: np.ndarray, rel: np.ndarray, p: PSTH, window, baseline: bool, theme: str):
+def save_vector(fig: Figure, path: str | os.PathLike) -> None:
+    """SVG or PDF by suffix, white background, text kept as editable text."""
+    with rc_context({"svg.fonttype": "none", "pdf.fonttype": 42}):
+        fig.savefig(path, facecolor="white")
+
+
+def _frame(fig: Figure, title: str | None, ink2: str):
+    """An add_axes that leaves room for a title line at the top when there is one."""
+    squeeze = 1.0
+    if title:
+        fig.text(0.02, 0.985, title, va="top", ha="left", size=8, color=ink2, wrap=True)
+        squeeze = 0.91
+
+    def add(box, **kwargs):
+        left, bottom, width, height = box
+        return fig.add_axes((left, bottom * squeeze, width, height * squeeze), **kwargs)
+
+    return add, squeeze
+
+
+def build_unit_figure(
+    trial: np.ndarray, rel: np.ndarray, p: PSTH, window, baseline: bool, theme: str, title=None
+) -> Figure:
     """Raster (top) and PSTH mean ± SEM (bottom) sharing the time axis."""
     t = _theme(theme)
     fig = Figure(figsize=(5.6, 4.6))
-    ax_r = fig.add_axes((0.13, 0.47, 0.84, 0.50))
-    ax_p = fig.add_axes((0.13, 0.11, 0.84, 0.31), sharex=ax_r)
+    add, _ = _frame(fig, title, t["ink2"])
+    ax_r = add((0.13, 0.47, 0.84, 0.50))
+    ax_p = add((0.13, 0.11, 0.84, 0.31), sharex=ax_r)
     ax_r.plot(rel, trial, "|", color=t["ink"], markersize=2.2, markeredgewidth=0.6)
     ax_r.set_ylim(p.n_trials - 0.5, -0.5)
     ax_r.set_ylabel("trial")
@@ -91,15 +116,32 @@ def unit_figure(trial: np.ndarray, rel: np.ndarray, p: PSTH, window, baseline: b
     for ax in (ax_r, ax_p):
         _style(ax, t)
         ax.axvline(0, color=t["muted"], lw=1, ls=(0, (3, 3)))
-    return _png(fig)
+    return fig
 
 
-def population_figure(
-    scaled: np.ndarray, centers: np.ndarray, mean: np.ndarray, sem: np.ndarray, window, theme: str
-) -> tuple[bytes, tuple[float, float, float, float]]:
+def unit_figure(trial, rel, p: PSTH, window, baseline: bool, theme: str) -> bytes:
+    """build_unit_figure as a PNG for the page."""
+    return _png(build_unit_figure(trial, rel, p, window, baseline, theme))
+
+
+def population_figure(scaled, centers, mean, sem, window, theme: str):
+    """build_population_figure as a PNG for the page, with the heatmap's box."""
+    fig, box = build_population_figure(scaled, centers, mean, sem, window, theme)
+    return _png(fig), box
+
+
+def build_population_figure(
+    scaled: np.ndarray,
+    centers: np.ndarray,
+    mean: np.ndarray,
+    sem: np.ndarray,
+    window,
+    theme: str,
+    title=None,
+) -> tuple[Figure, tuple[float, float, float, float]]:
     """Heatmap of row-scaled PSTHs, (n_units, n_bins) already sorted, and the selection mean.
 
-    Returns the PNG and the heatmap's box (left, top, right, bottom) as fractions of
+    Returns the figure and the heatmap's box (left, top, right, bottom) as fractions of
     the image, top-down, so row i spans top + (bottom - top) * [i, i + 1] / n_units.
     """
     t = _theme(theme)
@@ -108,10 +150,11 @@ def population_figure(
         "studio", t["diverging"] if signed else t["sequential"]
     )
     fig = Figure(figsize=(5.6, 5.6))
+    add, squeeze = _frame(fig, title, t["ink2"])
     box = (0.13, 0.40, 0.72, 0.56)  # left, bottom, width, height
-    ax_h = fig.add_axes(box)
-    cax = fig.add_axes((0.87, 0.40, 0.025, 0.56))
-    ax_m = fig.add_axes((0.13, 0.08, 0.72, 0.24), sharex=ax_h)
+    ax_h = add(box)
+    cax = add((0.87, 0.40, 0.025, 0.56))
+    ax_m = add((0.13, 0.08, 0.72, 0.24), sharex=ax_h)
     im = ax_h.imshow(
         scaled,
         aspect="auto",
@@ -138,4 +181,5 @@ def population_figure(
         _style(ax, t)
         ax.axvline(0, color=t["muted"], lw=1, ls=(0, (3, 3)))
     left, bottom, width, height = box
-    return _png(fig), (left, 1 - bottom - height, left + width, 1 - bottom)
+    bottom, height = bottom * squeeze, height * squeeze
+    return fig, (left, 1 - bottom - height, left + width, 1 - bottom)

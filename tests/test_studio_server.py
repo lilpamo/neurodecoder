@@ -76,3 +76,39 @@ def test_responsiveness_runs_once_per_event_and_feeds_the_table(tmp_path):
     assert {r["resp"] for r in rows} <= {"up", "down", "no"}
     assert all(0 < r["resp_p"] <= 1 for r in rows)
     assert studio.test_json(q) == summary  # cached, not rerun
+
+
+def test_posts_only_from_this_page_and_saving_writes_the_project(tmp_path):
+    import json
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    from neurodecoder.studio.project import DEFAULT_VIEW, Source
+    from neurodecoder.studio.server import make_handler
+
+    studio = _studio(tmp_path)
+    studio.source = Source(
+        kind="phy", folder=str(tmp_path / "imec0"), events=str(tmp_path / "events.csv")
+    )
+    studio.project_path = tmp_path / "p.ndstudio.json"
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(studio))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/api/project"
+    body = json.dumps({**DEFAULT_VIEW, "event": "stim_on"}).encode()
+
+    def post(headers):
+        request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            return urllib.request.urlopen(request).status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    try:
+        assert post({"Content-Type": "text/plain"}) == 415
+        assert post({"Content-Type": "application/json", "Origin": "http://evil.test"}) == 403
+        assert not studio.project_path.exists()
+        assert post({"Content-Type": "application/json"}) == 200
+        assert json.loads(studio.project_path.read_text())["view"]["event"] == "stim_on"
+    finally:
+        server.shutdown()

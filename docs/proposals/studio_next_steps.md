@@ -149,7 +149,13 @@ population heatmap gains a "responsive only" filter.
 times. Kilosort's `good` passes 200 units on d23a44ef probe00, where IBL's label
 passes 114 (see step 1's DECISIONS entry).
 
-## 4. Project file and figure export (`studio/project.py`), about 1 session
+## 4. Project file and figure export — built (2026-09-30)
+
+Built as planned (`docs/DECISIONS.md`, "Project files and figure export"):
+- Opening, saving and exporting use command-line paths (`--project`) rather than a
+  folder picker.
+- Export writes SVG, PDF, JSON sidecars and a manifest to `runs/<time>_studio/`.
+
 
 **Project file:** `*.ndstudio.json`, a plain JSON file that holds:
 - the data source (backend and eid, or Phy path), with a hash of the spike files;

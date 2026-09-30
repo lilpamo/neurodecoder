@@ -44,17 +44,27 @@ from neurodecoder.analysis.psth import (
 from neurodecoder.analysis.responsiveness import load_response_config, responsiveness
 from neurodecoder.analysis.units import unit_table
 from neurodecoder.data.atlas_meshes import mesh_path
-from neurodecoder.data.backends.phy import load_session_phy
-from neurodecoder.data.load import load_data_config, load_session
-from neurodecoder.qc.phy import load_phy_qc_config
-from neurodecoder.qc.units import load_qc_config
+from neurodecoder.data.load import load_data_config
+from neurodecoder.studio.export import export_view
+from neurodecoder.studio.project import (
+    DEFAULT_VIEW,
+    SUFFIX,
+    Source,
+    load_source,
+    make_project,
+    open_project,
+    save_project,
+)
 from neurodecoder.viz.studio_plots import population_figure, unit_figure
 
 HERE = Path(__file__).parent
 STATIC = HERE / "static"
 DEFAULT_LEVEL = "Beryl"
 BRAIN_ID = 997  # Allen structure id of the whole brain ("root")
+DEFAULT_EID = "d23a44ef-1402-4ed7-97f5-47e9a7a504d9"
 _MESH = re.compile(r"^/mesh/(\d+)\.obj$")
+_MAX_BODY = 1 << 20
+RUNS = Path(__file__).resolve().parents[2] / "runs"
 
 
 def _records(frame: pd.DataFrame) -> list[dict]:
@@ -63,8 +73,22 @@ def _records(frame: pd.DataFrame) -> list[dict]:
 
 
 class Studio:
-    def __init__(self, session, qc, atlas_root: Path):
+    def __init__(
+        self,
+        session,
+        qc,
+        atlas_root: Path,
+        source: Source | None = None,
+        project_path: Path | None = None,
+        view: dict | None = None,
+        warnings: list[str] = (),
+    ):
         self.session = session
+        self.qc = qc
+        self.source = source  # where the session came from; recorded in projects and exports
+        self.project_path = project_path
+        self.view = {**DEFAULT_VIEW, **(view or {})}
+        self.warnings = list(warnings)
         self.units = unit_table(session, qc)
         self.atlas_root = atlas_root
         self.has_regions = "units.acronym" in session.available.present
@@ -117,7 +141,24 @@ class Studio:
             "default_level": DEFAULT_LEVEL,
             "missing": {k: v for k, v in missing.items() if k.startswith("units.")},
             "response": dict(self.response_cfg.__dict__),
+            "project": {
+                "path": None if self.project_path is None else str(self.project_path),
+                "view": self.view,
+                "warnings": self.warnings,
+            },
         }
+
+    def save(self, view: dict) -> dict:
+        """Write the project file: source, hashes, configs and this view, never results."""
+        if self.source is None or self.project_path is None:
+            raise ValueError("this Studio was started without a data source to save")
+        save_project(make_project(self.source, self.session, self.qc, view), self.project_path)
+        self.view = {**DEFAULT_VIEW, **view}
+        return {"path": str(self.project_path)}
+
+    def export(self, view: dict) -> dict:
+        out = export_view(self, view, RUNS)
+        return {"folder": str(out), "files": sorted(p.name for p in out.iterdir())}
 
     def test_json(self, q: dict) -> dict:
         """Run (or reuse) the responsiveness test on every shown unit for one event."""
@@ -212,7 +253,8 @@ class Studio:
             "meshes": meshes,
         }
 
-    def unit_png(self, q: dict) -> tuple[bytes, dict]:
+    def unit_data(self, q: dict) -> dict:
+        """Every number the selected unit's figure plots, and its caption."""
         window, bin_width, baseline, events = self._params(q)
         spikes = self.session.spikes[q["unit"]]
         p = psth(spikes, events, window, bin_width, baseline)
@@ -222,10 +264,25 @@ class Studio:
         caption = f"{q['unit']}{where} · {EVENTS[q['event']][0]} · n = {p.n_trials} trials" + (
             f", {p.n_excluded} without this event excluded" if p.n_excluded else ""
         )
-        png = unit_figure(trial, rel, p, window, baseline is not None, q.get("theme", "light"))
-        return png, {"X-Caption": quote(caption)}
+        return {
+            "trial": trial,
+            "rel": rel,
+            "psth": p,
+            "window": window,
+            "baseline": baseline,
+            "caption": caption,
+        }
 
-    def population_png(self, q: dict) -> tuple[bytes, dict]:
+    def unit_png(self, q: dict) -> tuple[bytes, dict]:
+        d = self.unit_data(q)
+        theme = q.get("theme", "light")
+        png = unit_figure(
+            d["trial"], d["rel"], d["psth"], d["window"], d["baseline"] is not None, theme
+        )
+        return png, {"X-Caption": quote(d["caption"])}
+
+    def population_data(self, q: dict) -> dict:
+        """Every number the population figure plots, rows in plotted order, and its caption."""
         window, bin_width, baseline, events = self._params(q)
         ids = self._select(q)
         if not ids:
@@ -236,26 +293,37 @@ class Studio:
             raise ValueError("needs at least 2 trials with this event: one half sorts, one shows")
         spikes = self.session.spikes
         order = peak_order(population_psth(spikes, ids, sort_on, window, bin_width, baseline))
-        pop = population_psth(spikes, ids, show, window, bin_width, baseline)
+        pop = population_psth(spikes, ids, show, window, bin_width, baseline)[order]
         mean, sem = selection_average(pop)
         edges = bin_edges(window, bin_width)
-        png, box = population_figure(
-            scale_rows_for_display(pop[order]),
-            (edges[:-1] + edges[1:]) / 2,
-            mean,
-            sem,
-            window,
-            q.get("theme", "light"),
-        )
         which = "responsive " if q.get("responsive") == "1" else ""
         caption = (
             f"{len(ids)} {which}units ({q.get('node') or 'all regions'}) · "
             f"{EVENTS[q['event']][0]} · sorted by peak time on odd trials (n = {sort_on.size}), "
             f"showing even trials (n = {show.size})"
         )
+        return {
+            "units": [ids[i] for i in order],
+            "rates_hz": pop,
+            "scaled": scale_rows_for_display(pop),
+            "bin_centers": (edges[:-1] + edges[1:]) / 2,
+            "mean": mean,
+            "sem": sem,
+            "window": window,
+            "baseline": baseline,
+            "n_sort_trials": int(sort_on.size),
+            "n_show_trials": int(show.size),
+            "caption": caption,
+        }
+
+    def population_png(self, q: dict) -> tuple[bytes, dict]:
+        d = self.population_data(q)
+        png, box = population_figure(
+            d["scaled"], d["bin_centers"], d["mean"], d["sem"], d["window"], q.get("theme", "light")
+        )
         headers = {
-            "X-Caption": quote(caption),
-            "X-Rows": ",".join(ids[i] for i in order),
+            "X-Caption": quote(d["caption"]),
+            "X-Rows": ",".join(d["units"]),
             "X-Box": ",".join(f"{v:.4f}" for v in box),
         }
         return png, headers
@@ -284,6 +352,7 @@ def make_handler(studio: Studio):
         "/api/population.png": ("image/png", studio.population_png),
         "/": ("text/html; charset=utf-8", lambda q: ((HERE / "index.html").read_bytes(), {})),
     }
+    posts = {"/api/project": studio.save, "/api/export": studio.export}
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -304,6 +373,26 @@ def make_handler(studio: Studio):
                 # Plain-language refusal for the page to show, never a traceback.
                 self._send(400, "text/plain; charset=utf-8", f"Cannot show this: {e}".encode())
 
+        def do_POST(self):
+            # Only this page may post: JSON bodies force a CORS preflight, which this
+            # server never answers, and the Origin must be this server's own.
+            origin = self.headers.get("Origin")
+            if origin and urlparse(origin).netloc != self.headers.get("Host"):
+                return self._send(403, "text/plain", b"cross-origin request refused")
+            if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                return self._send(415, "text/plain", b"expected application/json")
+            length = int(self.headers.get("Content-Length", 0))
+            if length > _MAX_BODY:
+                return self._send(413, "text/plain", b"request too large")
+            fn = posts.get(urlparse(self.path).path)
+            if fn is None:
+                return self._send(404, "text/plain", b"not found")
+            try:
+                view = json.loads(self.rfile.read(length) or b"{}")
+                self._send(200, "application/json", json.dumps(fn(view)).encode())
+            except (ValueError, KeyError, OSError) as e:
+                self._send(400, "text/plain; charset=utf-8", f"Cannot do this: {e}".encode())
+
         def _send(self, code, ctype, body, headers=None):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
@@ -319,23 +408,58 @@ def make_handler(studio: Studio):
     return Handler
 
 
+def _new_project_path(root: Path, name: str) -> Path:
+    """root/<name>.ndstudio.json, or <name>-2, -3, ... so no project is overwritten."""
+    path, n = root / f"{name}{SUFFIX}", 2
+    while path.exists():
+        path, n = root / f"{name}-{n}{SUFFIX}", n + 1
+    return path
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--eid", default="d23a44ef-1402-4ed7-97f5-47e9a7a504d9")
+    ap.add_argument("--eid", help="an IBL session (default d23a44ef-1402-4ed7-97f5-47e9a7a504d9)")
     ap.add_argument("--backend", default="bwm")
     ap.add_argument("--phy", help="a Kilosort/Phy output folder (one probe); needs --events")
     ap.add_argument("--events", help="CSV of trial events, seconds on the probe's clock")
+    ap.add_argument(
+        "--project",
+        type=Path,
+        help=f"a *{SUFFIX} file: alone, opens it; with a data source, saves a new one there",
+    )
     ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args()
     if bool(args.phy) != bool(args.events):
         ap.error("--phy and --events go together")
-    atlas_root = load_data_config().data_root / "atlas"
-    if args.phy:
-        session, qc = load_session_phy(args.phy, args.events), load_phy_qc_config()
+    if args.phy and args.eid:
+        ap.error("choose one data source: --eid or --phy")
+    data = load_data_config()
+    view, warnings = None, []
+    if args.project and not (args.phy or args.eid):
+        if not args.project.exists():
+            ap.error(f"{args.project} does not exist; give a data source to start a new project")
+        project, session, qc, warnings = open_project(args.project)
+        source = Source(**{k: v for k, v in project["source"].items() if k != "release"})
+        view, path = project["view"], args.project
     else:
-        session, qc = load_session(args.eid, args.backend), load_qc_config()
-    studio = Studio(session, qc, atlas_root)
+        if args.phy:
+            source = Source(
+                kind="phy",
+                folder=str(Path(args.phy).resolve()),
+                events=str(Path(args.events).resolve()),
+            )
+        else:
+            source = Source(kind="ibl", eid=args.eid or DEFAULT_EID, backend=args.backend)
+        if args.project and args.project.exists():
+            ap.error(f"{args.project} exists; open it with --project alone, or choose a new name")
+        name = Path(source.folder).name if source.kind == "phy" else source.eid[:8]
+        path = args.project or _new_project_path(data.data_root / "projects", name)
+        session, qc = load_source(source)
+    studio = Studio(session, qc, data.data_root / "atlas", source, path, view, warnings)
     print(f"Neurodecoder Studio: http://127.0.0.1:{args.port}  ({session.eid})", flush=True)
+    print(f"Project file: {path}", flush=True)
+    for warning in warnings:
+        print(f"Warning: {warning}", flush=True)
     # Threads, so a long responsiveness test doesn't hold up the plots.
     ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(studio)).serve_forever()
 

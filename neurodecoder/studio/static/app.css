@@ -105,3 +105,12 @@ tbody tr[aria-selected=true] td { background: var(--accent-wash); }
 .btn:hover { background: var(--line); }
 .btn:disabled { cursor: progress; opacity: .6; }
 td.resp { text-align: center; }
+
+.project { display: flex; align-items: center; gap: 8px; }
+.project .btn { margin: 0; }
+.banner { background: var(--surface); border-bottom: 1px solid var(--line); border-left: 4px solid #fab219; padding: 8px 16px; font-size: 12px; }
+.banner strong { margin-right: 6px; }
+.banner ul { margin: 4px 0 0; padding-left: 18px; }
+.brand { white-space: nowrap; }
+.project .note { margin: 0; max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project .btn, .seg { flex: none; }
