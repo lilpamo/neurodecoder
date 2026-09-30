@@ -17,6 +17,8 @@ It raises and never warns. It checks (docs/SPLITS_AND_LEAKAGE.md, "The guard API
 import math
 from itertools import combinations
 
+import numpy as np
+
 from neurodecoder.data.manifest import manifest_versions
 from neurodecoder.preprocess.binning import load_preproc_config
 from neurodecoder.splits.registry import (
@@ -160,15 +162,29 @@ def _check_partitions(split: Split) -> None:
 
 
 def _check_session_folds(split: Split, eid: str, context_bins: int) -> None:
-    """leave_one_block_out: per fold, the test block and each training interval share no
+    """leave_one_block_out: per fold, the test span and each training interval share no
     bin and sit at least max(context, 2 s) apart; trials lie inside their partition's
-    intervals and on one side only; across folds, a trial is tested at most once."""
+    intervals and on one side only; the test and training trials each hold both block
+    labels (probabilityLeft 0.2 and 0.8); across folds, a trial is tested at most once."""
     record = split.sessions[eid]
     bin_ms = split.preproc["bin_ms"]
     need = max(context_bins, math.ceil(MIN_GAP_S * 1000 / bin_ms))
     intervals = record["trial_intervals"]
+    if "trial_prior" not in record:
+        raise ValueError(
+            f"{eid}: the split has no trial_prior; it predates the block-pair fix and "
+            "cannot be checked for one-label test sets"
+        )
+    prior = np.asarray(record["trial_prior"], dtype=np.float64)
     tested: set[int] = set()
     for k, fold in enumerate(record.get("folds", [])):
+        for partition, listed in fold["trials"].items():
+            labels = set(prior[list(listed)].tolist()) & {0.2, 0.8}
+            if labels != {0.2, 0.8}:
+                raise ValueError(
+                    f"{eid} fold {k}: the {partition} trials hold only block label(s) "
+                    f"{sorted(labels)}; each fold needs both 0.2 and 0.8"
+                )
         t0, t1 = bin_range(fold["blocks"]["test"], bin_ms)
         for block in fold["blocks"]["train"]:
             a0, a1 = bin_range(block, bin_ms)

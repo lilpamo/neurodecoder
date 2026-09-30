@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from neurodecoder.data.manifest import Manifest, manifest_versions
-from neurodecoder.evaluation.contract import ROWS, SessionData, evaluate
+from neurodecoder.evaluation.contract import ROWS, SessionData, _mean_over_folds, evaluate
 from neurodecoder.evaluation.nulls import draw_shifts
 from neurodecoder.preprocess.binning import load_preproc_config
 from neurodecoder.splits.registry import bin_range, held_out_groups, within_session
@@ -208,14 +208,33 @@ class _FoldView:
         )
 
 
-def test_folds_are_fit_separately_and_pooled_per_session():
+def test_folds_are_fit_and_scored_separately_per_session():
     provider = FoldProvider(_within_split(["e00", "e01", "e10", "e11", "e20", "e21"]))
     result = _run(provider, ceiling=None, n_shifts=5)
-    assert result.n_folds == 2
+    assert result.n_folds == 2 and "scored per fold" in result.report()
     # Each half is held out once: every sample whose window fits inside one half.
     per_half = [(b - a + 1) - CONTEXT + 1 for a, b in FoldProvider.HALVES]
-    assert (result.per_session["model"]["n_samples"] == sum(per_half)).all()
+    model = result.per_session["model"]
+    assert (model["n_samples"] == sum(per_half)).all() and (model["n_folds"] == 2).all()
     assert result.summary().loc["model", "median"] > 0.9
+
+
+def test_fold_scores_are_averaged_never_pooled():
+    # Fold 0 ranks its samples perfectly around a low offset, fold 1 around a high one.
+    # Pooled, the offsets would rank fold 1's zeros above fold 0's ones; per fold they
+    # can't. Fold 2's test labels hold one class: no AUROC, so it is left out entirely.
+    def fold(auroc, log_loss, n):
+        return pd.DataFrame(
+            {"auroc": [auroc], "log_loss": [log_loss], "n_samples": [n]},
+            index=pd.Index(["e0"], name="eid"),
+        )
+
+    table = _mean_over_folds(
+        [fold(1.0, 0.2, 10), fold(0.8, 0.4, 30), fold(np.nan, 9.0, 5)], "classification"
+    )
+    assert table.loc["e0", "auroc"] == pytest.approx(0.9)
+    assert table.loc["e0", "log_loss"] == pytest.approx(0.3)  # fold 2 excluded here too
+    assert table.loc["e0", "n_samples"] == 40 and table.loc["e0", "n_folds"] == 2
 
 
 class PseudoProvider(Provider):

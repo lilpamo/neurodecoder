@@ -18,9 +18,12 @@ Kinds (docs/SPLITS_AND_LEAKAGE.md):
 - held_out_config: sessions with fewer QC-passing units than their lab's 10th
   percentile are test; sessions at or above their lab's 25th percentile are train.
 - leave_one_block_out (block only; adopted after the first table): within each
-  session, every biased block is held out once as a fold's test set, and the fold
-  trains on the trials before and after it, leaving out any trial within a gap of
-  the held-out block.
+  session, the biased blocks are taken in adjacent pairs (one 0.2 and one 0.8 block;
+  with an odd count the last block joins the final pair). Each pair is held out once
+  as a fold's test set, and the fold trains on the trials before and after it,
+  leaving out any trial within a gap of the pair. The first version held out single
+  blocks, so each test set held one label; it inverted decoders with no signal (see
+  docs/NEGATIVE_RESULTS.md).
 
 Random choices use numpy's default_rng with the required seed. The saved file, not
 the seed, is the record: a different numpy could draw differently from the same seed.
@@ -53,8 +56,10 @@ KINDS = (
     "held_out_config",
     "leave_one_block_out",
 )
-# leave_one_block_out needs this many biased blocks, so that every fold's training
-# data (all blocks but one) still holds both block labels.
+# leave_one_block_out holds out adjacent pairs of biased blocks, so every test set holds
+# both block labels, and needs this many biased blocks, so every fold's training data
+# does too.
+LOBO_BLOCKS_PER_FOLD = 2
 MIN_LOBO_BLOCKS = 4
 # Behavioural autocorrelation outlives the neural context, so temporal splits keep at
 # least this much time between train and test whatever the context.
@@ -411,15 +416,17 @@ def leave_one_block_out(
     *,
     gap_s: float,
 ) -> Split:
-    """One fold per biased block (probabilityLeft 0.2 or 0.8) of each session.
+    """One fold per adjacent pair of biased blocks (probabilityLeft 0.2 and 0.8) of each
+    session; with an odd number of blocks, the last one joins the final pair.
 
     trials: eid -> that session's Session.trials (row i is trial i), with intervals and
-    probabilityLeft. A fold's test block runs from its block's first trial's start to
+    probabilityLeft. A fold's test span runs from its pair's first trial's start to
     its last trial's end. Its training trials are every earlier trial whose last bin
-    is at least ceil(gap_s * rate) empty bins before the test block's first bin, and
+    is at least ceil(gap_s * rate) empty bins before the test span's first bin, and
     every later trial whose first bin is that far after its last; trials in between
-    are in neither. The opening unbiased block is never a test block. Sessions with
-    fewer than MIN_LOBO_BLOCKS biased blocks are refused, not dropped.
+    are in neither. The opening unbiased block is never tested. Sessions with fewer
+    than MIN_LOBO_BLOCKS biased blocks are refused, not dropped. Each session record
+    keeps every trial's probabilityLeft (trial_prior) so the guard can check labels.
     """
     if gap_s < MIN_GAP_S:
         raise ValueError(f"gap_s must be at least {MIN_GAP_S} s, got {gap_s}")
@@ -443,10 +450,13 @@ def leave_one_block_out(
                 f"{eid}: {len(blocks)} biased blocks; leave-one-block-out needs "
                 f"{MIN_LOBO_BLOCKS} so every fold trains on both labels"
             )
+        k = LOBO_BLOCKS_PER_FOLD
+        groups = [(blocks[i][0], blocks[i + k - 1][1]) for i in range(0, len(blocks) - k + 1, k)]
+        groups[-1] = (groups[-1][0], blocks[-1][1])  # a leftover block joins the final pair
         start_bins = np.floor(intervals[:, 0] * rate).astype(np.int64)
         end_bins = np.floor(intervals[:, 1] * rate).astype(np.int64)
         folds = []
-        for first, last in blocks:
+        for first, last in groups:
             test_first, test_last = start_bins[first], end_bins[last]
             before = [i for i in range(first) if end_bins[i] < test_first - gap_bins]
             after = [
@@ -467,10 +477,20 @@ def leave_one_block_out(
                     "trials": {"train": before + after, "test": list(range(first, last + 1))},
                 }
             )
-        sessions[eid] = {**meta[eid], "folds": folds, "trial_intervals": intervals.tolist()}
+        sessions[eid] = {
+            **meta[eid],
+            "folds": folds,
+            "trial_intervals": intervals.tolist(),
+            "trial_prior": prior.tolist(),
+        }
     partitions = {"train": list(sessions), "test": list(sessions)}
     return _split(
-        "leave_one_block_out", {"gap_s": float(gap_s)}, partitions, sessions, manifest, preproc
+        "leave_one_block_out",
+        {"gap_s": float(gap_s), "blocks_per_fold": LOBO_BLOCKS_PER_FOLD},
+        partitions,
+        sessions,
+        manifest,
+        preproc,
     )
 
 

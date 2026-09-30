@@ -257,10 +257,10 @@ LOBO = __import__("neurodecoder.splits.registry", fromlist=["x"]).leave_one_bloc
 )
 
 
-def test_leave_one_block_out_folds_serve_the_held_out_block():
+def test_leave_one_block_out_folds_serve_the_held_out_pair():
     provider = SplitData(LOBO, "block", load=SESSIONS.__getitem__)
-    folds = provider.folds()
-    assert len(folds) == 4 and provider.normalizer is None and len(provider.normalizers) == 4
+    folds = provider.folds()  # 4 blocks of 10 trials: two pairs
+    assert len(folds) == 2 and provider.normalizer is None and len(provider.normalizers) == 2
     table = provider._prepared["e0"].target.table
     for k, fold in enumerate(folds):
         record = LOBO.sessions["e0"]["folds"][k]
@@ -286,7 +286,7 @@ def test_leave_one_block_out_is_refused_for_per_bin_targets_and_pseudo_for_choic
         choice.data("e0", "train")
 
 
-def test_the_contract_pools_leave_one_block_out_folds():
+def test_the_contract_scores_leave_one_block_out_folds_separately():
     cfg = load_baseline_config()
     provider = SplitData(LOBO, "block", load=SESSIONS.__getitem__)
     provider.pseudo_sessions = False  # 40-trial fixtures are all inside IBL's 90 unbiased trials
@@ -298,8 +298,10 @@ def test_the_contract_pools_leave_one_block_out_folds():
         trialstruct=lambda: TrialStructureLogistic(cfg.cv),
     )
     result = evaluate(provider, ceiling=None, seed=0, n_shifts=5, **rows)
-    assert result.n_folds == 4 and result.ceiling_is_model
-    # Every usable block trial whose window fits its fold is tested once, pooled per session.
+    assert result.n_folds == 2 and result.ceiling_is_model
+    # Every usable block trial whose window fits its fold is tested once, each fold scored
+    # on its own; both folds hold both labels, so both are scored.
+    assert (result.per_session["model"]["n_folds"] == 2).all()
     n = result.per_session["model"]["n_samples"]
     usable = {e: len(provider._prepared[e].target.table) for e in EIDS}
     dropped = {

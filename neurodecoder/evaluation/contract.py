@@ -21,8 +21,12 @@ docs/DECISIONS.md, "Phase 3 gate: incremental row, leave-one-block-out, pseudo-s
 
 Every fit receives the train partition only; predictions are scored per test
 session (evaluation.metrics). A provider may split each session into folds (e.g.
-leave-one-block-out); each fold is fit separately and a session's held-out
-predictions from every fold are pooled before scoring.
+leave-one-block-out); each fold is fit and scored separately, and a session's
+metrics are the mean over its folds whose primary metric is defined (a fold whose
+test labels hold one class has no AUROC), with n_samples and n_folds counting those
+folds. Folds are never pooled before scoring: each fold's model has its own offset,
+set by its training data's class balance, and pooled predictions let those offsets
+rank the samples. Pooling inverted decoders with no signal (docs/NEGATIVE_RESULTS.md).
 
 Verdicts use a one-sided Wilcoxon signed-rank test over test sessions on the primary
 metric (R² or AUROC), alpha 0.05, with the median difference and win count; fewer
@@ -247,7 +251,11 @@ class ContractResult:
     def report(self) -> str:
         table = self.summary()
         extra = f", {self.n_pseudo} pseudo-sessions" if self.n_pseudo else ""
-        folds = f", {self.n_folds} folds per session at most" if self.n_folds > 1 else ""
+        folds = (
+            f", {self.n_folds} folds per session at most, scored per fold"
+            if self.n_folds > 1
+            else ""
+        )
         lines = [
             f"Evaluation contract: {self.kind}, primary metric {self.primary} over test "
             f"sessions (split {self.split_hash[:12]}, seed {self.seed}, {self.n_shifts} shifts"
@@ -291,17 +299,33 @@ def _folds(provider) -> list:
     return provider.folds() if hasattr(provider, "folds") else [provider]
 
 
+def _mean_over_folds(tables: list[pd.DataFrame], kind: str) -> pd.DataFrame:
+    """Per session: each metric's mean over the folds where the primary metric is
+    defined, the samples in those folds (n_samples) and their number (n_folds)."""
+    stacked = pd.concat(tables, keys=range(len(tables)), names=["fold", "eid"])
+    scored = stacked[np.isfinite(stacked[PRIMARY[kind]].to_numpy(np.float64))]
+    metrics = [c for c in stacked.columns if not c.startswith("n_")]
+    by_session = scored.groupby(level="eid")
+    table = by_session[metrics].mean()
+    table["n_samples"] = by_session["n_samples"].sum()
+    table["n_folds"] = by_session.size()
+    return table
+
+
 def _run(factory, provider, kind, eval_config, seed, label_of=None, strip=False) -> pd.DataFrame:
     """Fit on each fold's train partition, predict its test partition, and score each
-    session on its held-out predictions pooled over folds.
+    session: on its held-out predictions with one fold, or as the mean of its per-fold
+    scores with several (never pooled; see the module docstring).
 
     label_of(eid) -> the data() keywords for the session's labels ({} for the real
     ones, {"shift": k}, {"pseudo": seed}), or _SKIP to leave the session out.
     """
     label_of = label_of or (lambda eid: {})
     test_eids = list(provider.split.partitions["test"])
-    ys, predictions, eids = [], [], []
-    for fold in _folds(provider):
+    folds = _folds(provider)
+    tables = []
+    for fold in folds:
+        ys, predictions, eids = [], [], []
         decoder = factory()
         if decoder.kind != kind:
             raise ValueError(f"a {decoder.kind} decoder cannot fit a {kind} target")
@@ -317,12 +341,17 @@ def _run(factory, provider, kind, eval_config, seed, label_of=None, strip=False)
             predictions.append(_check_predictions(data, decoder.predict(data), kind))
             ys.append(np.asarray(data.y, dtype=np.float64))
             eids.append(np.full(len(data.ends), eid, dtype=object))
-    if not eids:
+        if eids:
+            y, prediction, sessions = map(np.concatenate, (ys, predictions, eids))
+            tables.append(per_session(kind, y, prediction, sessions, eval_config))
+    if not tables:
         return _undefined(kind, test_eids)
-    table = per_session(
-        kind, np.concatenate(ys), np.concatenate(predictions), np.concatenate(eids), eval_config
-    )
-    return table.reindex(test_eids)
+    if len(folds) == 1:
+        return tables[0].reindex(test_eids)
+    table = _mean_over_folds(tables, kind).reindex(test_eids)
+    counts = ["n_samples", "n_folds"]
+    table[counts] = table[counts].fillna(0).astype(np.int64)
+    return table
 
 
 def _verdict(subject: pd.Series, other: pd.Series, row: str, name: str = "model") -> Verdict:

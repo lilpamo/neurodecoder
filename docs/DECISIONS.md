@@ -6,6 +6,61 @@ first.
 
 ---
 
+### 2026-09-30 — Block split: adjacent pairs, scored per fold — made AFTER the confirmation set
+
+**Made after seeing the confirmation set's block table**
+(`runs/20260929T114437Z_phase3_confirmation/block`: `model` AUROC 0.000 in 9 of 10
+sessions, 0.019 in the tenth). That result exposed a defect in the split as first built
+(`docs/NEGATIVE_RESULTS.md`, 2026-09-30). The fix was accepted on a synthetic
+no-signal test, never on a real-data score. It changes block only: no null,
+threshold, target or split changed for any other target.
+
+**Decision** (the user chose pairs, then per-fold scoring after pairs alone failed
+the no-signal test):
+- **`leave_one_block_out` holds out adjacent pairs of biased blocks**
+  (`splits/registry.py`): one 0.2 and one 0.8 block per fold; with an odd count,
+  the last block joins the final pair. Every biased block is tested exactly once,
+  with the same 2 s gap either side. The split's params record
+  `blocks_per_fold: 2`, so its hash differs from the first version's.
+- **The guard rejects a fold whose test or training trials hold one label**
+  (`splits/guards.py`). Each session record now keeps every trial's
+  `probabilityLeft` (`trial_prior`), so the check reads the labels. A split
+  without it (the first version) is refused.
+- **The contract scores each fold separately** (`evaluation/contract.py`). A
+  session's metrics are the mean over its folds whose primary metric is defined.
+  A fold whose test labels hold one class has no AUROC, which can happen with
+  shifted or pseudo labels. `n_samples` and `n_folds` count the scored folds.
+  Providers with one fold (every other split) are scored exactly as before.
+- The per-fold normaliser and the other guard checks are unchanged.
+
+**Why per-fold scoring:** each fold's model has its own offset, set by its
+training class balance. Pooling lets those offsets rank samples across folds,
+which inverted decoders with no signal (single blocks: AUROC ~0) and still biased
+them with pairs (noise medians 0.34–0.41). Within a fold, every sample shares the
+offset.
+
+**Acceptance test:** `tests/test_lobo_no_signal.py`. Pure Poisson noise with
+IBL-generated block labels goes through the real split, provider, decoders and
+`evaluate`. `model`, `model_with_task`, `null_shuffle` and `null_pseudosession`
+must each score a median AUROC within 0.5 ± 0.07 over 6 sessions. They score
+0.489, 0.532, 0.519 and 0.499; `null_trialstruct` scores 0.491 and
+`baseline_rrr` 0.499.
+
+**Alternatives considered:**
+- Weighting both classes equally when fitting. It changes every block decoder
+  and was not tested.
+- Dropping the split and returning block to within-session with the
+  pseudo-session null.
+
+**Consequences:**
+- The block rows of both runs on the first version are invalid.
+- Block is re-run on the confirmation set only
+  (`runs/20260930T082034Z_phase3_confirmation_block_pairs`). The first table is
+  already seen, and choice and wheel velocity already fail the gate there, so
+  block can't change its outcome.
+- A per-session table from a fold split gains an `n_folds` column.
+- The no-signal test adds about 3 minutes to the suite.
+
 ### 2026-09-29 — Phase 3 gate: the incremental row, leave-one-block-out and pseudo-sessions for block — adopted AFTER the first table
 
 **Made after seeing the first table** (`runs/20260929T070943Z_phase3_first_table`,
@@ -57,8 +112,11 @@ result is itself a degree of freedom (split doc, route 4), so:
 - The normaliser is fit per fold on that fold's training data only (R3),
   hashed as `<split hash>#fold<k>`, and every fold's normaliser is saved
   (`normalizers.json`).
-- Per-session metrics pool every fold's test predictions, so each block is
-  scored once and every session has both classes.
+- ~~Per-session metrics pool every fold's test predictions, so each block is
+  scored once and every session has both classes.~~ **Superseded 2026-09-30:**
+  single-block folds with pooled scoring inverted decoders with no signal. The
+  split now holds out adjacent pairs, and each fold is scored on its own (entry
+  "Block split: adjacent pairs, scored per fold").
 - Refused for per-bin targets. Choice, wheel velocity and movement state stay
   on the within-session split.
 - The split is its own kind with its own hash (`split_leave_one_block_out.json`,
