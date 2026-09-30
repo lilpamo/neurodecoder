@@ -11,6 +11,7 @@
 </head>
 <body>
 <header class="topbar">
+  <a class="btn" href="/" title="Back to choosing data">← Home</a>
   <div class="brand">Neurodecoder <span>Studio</span></div>
   <div class="source" id="source">loading…</div>
   <div class="spacer"></div>
@@ -32,6 +33,11 @@
       <label class="check"><input type="checkbox" id="all"> Include units failing QC</label>
       <p class="note" id="counts"></p>
       <div class="seg probes" id="probeFilter" role="group" aria-label="Probe filter"></div>
+    </section>
+    <section>
+      <h2>Trials</h2>
+      <p class="note" id="trialCounts"></p>
+      <div class="trialbox" id="trialFilters"></div>
     </section>
     <section>
       <h2>Responsiveness</h2>

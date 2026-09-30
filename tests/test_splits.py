@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from neurodecoder.data.manifest import Manifest
+from neurodecoder.data.manifest import Manifest, manifest_versions
 from neurodecoder.preprocess.binning import PreprocConfig
 from neurodecoder.qc.units import UnitQC
 from neurodecoder.splits.guards import assert_split_valid
@@ -21,7 +21,8 @@ from neurodecoder.splits.registry import (
 )
 
 PREPROC = PreprocConfig(bin_ms=20, qc=UnitQC(1.0, ("void", "root"), 0.1))
-PROVENANCE = {"manifest_version": 1, "sources": {"bwm_ephys": "1.2.1", "bwm_behavior": "2.0.0"}}
+# This code's manifest provenance (version and release versions), as a real split records it.
+PROVENANCE = manifest_versions()
 EXPECT = {"manifest_provenance": PROVENANCE, "preproc_fingerprint": PREPROC.fingerprint()}
 
 
@@ -218,7 +219,10 @@ def test_guard_catches_version_mismatches():
         assert_split_valid(
             split,
             context_bins=50,
-            manifest_provenance={**PROVENANCE, "manifest_version": 2},
+            manifest_provenance={
+                **PROVENANCE,
+                "manifest_version": PROVENANCE["manifest_version"] + 1,
+            },
             preproc_fingerprint=PREPROC.fingerprint(),
         )
 

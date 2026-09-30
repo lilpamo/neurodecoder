@@ -16,6 +16,7 @@ Only conditions whose columns the table has are offered, so Phy sessions get wha
 their events CSV provides.
 """
 
+import json
 from dataclasses import dataclass
 
 import numpy as np
@@ -151,3 +152,127 @@ def split_event_times(trials: pd.DataFrame, event: str, cond: Condition) -> list
         Part(level, name, times[cond.values == level])
         for level, name in zip(cond.levels, cond.names)
     ]
+
+
+# ---------- trial filters: which trials an analysis uses ----------
+
+# name -> (label, trials columns it needs)
+TRIAL_FILTERS = {
+    "bwm_include": ("BWM trial inclusion", ("bwm_include",)),
+    "exclude_nogo": ("Exclude no-go", ("choice",)),
+    "contrasts": ("Contrasts", ("contrastLeft", "contrastRight")),
+    "blocks": ("Blocks", ("probabilityLeft",)),
+    "outcomes": ("Outcomes", ("feedbackType",)),
+}
+
+
+@dataclass(frozen=True)
+class TrialFilter:
+    """Which trials to keep. Empty tuples and False keep everything.
+
+    bwm_include: keep only the release's bwm_include trials. On d23a44ef that is exactly
+    a reaction time (first movement - stimulus onset) within [0.08, 2] s.
+    contrasts: absolute contrasts to keep (0 is 0%); blocks: probabilityLeft values;
+    outcomes: feedbackType values (-1 error, 1 reward).
+    """
+
+    bwm_include: bool = False
+    exclude_nogo: bool = False
+    contrasts: tuple[float, ...] = ()
+    blocks: tuple[float, ...] = ()
+    outcomes: tuple[float, ...] = ()
+
+    def normalised(self) -> "TrialFilter":
+        def values(v):
+            return tuple(sorted({float(x) for x in v}))
+
+        return TrialFilter(
+            bool(self.bwm_include),
+            bool(self.exclude_nogo),
+            values(self.contrasts),
+            values(self.blocks),
+            values(self.outcomes),
+        )
+
+    def to_dict(self) -> dict:
+        n = self.normalised()
+        return {
+            "bwm_include": n.bwm_include,
+            "exclude_nogo": n.exclude_nogo,
+            "contrasts": list(n.contrasts),
+            "blocks": list(n.blocks),
+            "outcomes": list(n.outcomes),
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "TrialFilter":
+        unknown = sorted(set(raw) - set(TRIAL_FILTERS))
+        if unknown:
+            raise ValueError(f"unknown trial filters {unknown}; known: {sorted(TRIAL_FILTERS)}")
+        return cls(**raw).normalised()
+
+    def key(self) -> str:
+        """One canonical string per filter, for caches and records."""
+        return json.dumps(self.to_dict(), sort_keys=True)
+
+    def active(self) -> list[str]:
+        n = self.normalised()
+        return [name for name in TRIAL_FILTERS if getattr(n, name)]
+
+
+@dataclass(frozen=True)
+class TrialSelection:
+    """mask: (n_trials,) kept trials. excluded: reason -> trials failing it (a trial
+    failing several filters is counted under each, and once in n_excluded)."""
+
+    mask: np.ndarray
+    n_total: int
+    n_kept: int
+    n_excluded: int
+    excluded: dict[str, int]
+
+
+def available_trial_filters(trials: pd.DataFrame) -> dict[str, dict]:
+    """name -> {label, available, reason}: offered only when the table has the columns."""
+    out = {}
+    for name, (label, columns) in TRIAL_FILTERS.items():
+        missing = [c for c in columns if c not in trials]
+        out[name] = {
+            "label": label,
+            "available": not missing,
+            "reason": f"trials have no {', '.join(missing)} column" if missing else "",
+        }
+    return out
+
+
+def apply_trial_filter(trials: pd.DataFrame, f: TrialFilter) -> TrialSelection:
+    """Which trials the filter keeps, with every exclusion counted by reason."""
+    f = f.normalised()
+    offered = available_trial_filters(trials)
+    for name in f.active():
+        if not offered[name]["available"]:
+            raise ValueError(f"cannot filter by {name}: {offered[name]['reason']}")
+    n = len(trials)
+    reasons: dict[str, np.ndarray] = {}
+    if f.bwm_include:
+        reasons["not bwm_include"] = ~trials["bwm_include"].fillna(False).to_numpy(bool)
+    if f.exclude_nogo:
+        reasons["no-go"] = trials["choice"].to_numpy(np.float64) == 0
+    if f.contrasts:
+        level = np.abs(signed_contrast(trials))
+        undefined = np.isnan(level)
+        reasons["contrast undefined"] = undefined
+        reasons["contrast not selected"] = ~undefined & ~np.isin(level, f.contrasts)
+    if f.blocks:
+        reasons["block not selected"] = ~np.isin(
+            trials["probabilityLeft"].to_numpy(np.float64), f.blocks
+        )
+    if f.outcomes:
+        reasons["outcome not selected"] = ~np.isin(
+            trials["feedbackType"].to_numpy(np.float64), f.outcomes
+        )
+    dropped = np.zeros(n, bool)
+    for failed in reasons.values():
+        dropped |= failed
+    excluded = {r: int(v.sum()) for r, v in reasons.items() if v.any()}
+    return TrialSelection(~dropped, n, int((~dropped).sum()), int(dropped.sum()), excluded)

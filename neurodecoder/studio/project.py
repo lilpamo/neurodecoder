@@ -59,6 +59,9 @@ DEFAULT_VIEW = {
     "unit": None,
     "probe": "",  # "" is every probe; added after version 1 files, which open on all probes
     "split": "",  # "" is no condition split; added later, older files open unsplit
+    # analysis.conditions.TrialFilter as a dict; {} keeps every trial. Added later: older
+    # files, computed on all trials, open on all trials.
+    "trials": {},
 }
 
 

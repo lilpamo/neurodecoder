@@ -4,11 +4,13 @@ Standard-library HTTP server, no web framework. It loads the session once and an
 each request by calling analysis/ (numbers), viz/ (PNGs) and data/atlas_meshes
 (cached Allen meshes). The page draws what it is sent and computes nothing.
 
+    python -m neurodecoder.studio.server            # the homepage: choose data
     python -m neurodecoder.studio.server --eid d23a44ef-1402-4ed7-97f5-47e9a7a504d9
     python -m neurodecoder.studio.server --phy FOLDER --events events.csv
 """
 
 import argparse
+import dataclasses
 import json
 import mimetypes
 import re
@@ -30,9 +32,21 @@ from neurodecoder.analysis.atlas import (
     region_tree,
     units_in_node,
 )
+from neurodecoder.analysis.catalog import (
+    SessionFilter,
+    filter_sessions,
+    load_catalog,
+    load_catalog_config,
+    region_counts,
+    summary,
+)
 from neurodecoder.analysis.conditions import (
     CONDITIONS,
+    TrialFilter,
+    TrialSelection,
+    apply_trial_filter,
     available_conditions,
+    available_trial_filters,
     condition,
     split_event_times,
 )
@@ -56,7 +70,9 @@ from neurodecoder.analysis.tuning import (
 )
 from neurodecoder.analysis.units import unit_table
 from neurodecoder.data.atlas_meshes import mesh_path
-from neurodecoder.data.load import load_data_config
+from neurodecoder.data.cache import SessionCache
+from neurodecoder.data.load import DataConfig, key_parts, load_data_config
+from neurodecoder.data.manifest import Manifest, build_manifest
 from neurodecoder.studio.export import export_view
 from neurodecoder.studio.project import (
     DEFAULT_VIEW,
@@ -115,14 +131,31 @@ class Studio:
         self.has_positions = all(f"units.{a}" in session.available.present for a in "xyz")
         self.response_cfg = load_response_config()
         self.selectivity_cfg = load_selectivity_config()
-        # (event, condition, all units, probe) -> result: BH ran over exactly that set.
-        self._selectivity: dict[tuple[str, str, bool, str], pd.DataFrame] = {}
+        # (event, condition, all units, probe, trial filter) -> result: BH over that set.
+        self._selectivity: dict[tuple, pd.DataFrame] = {}
         self.probes = sorted(self.units["probe"].unique())
-        # (event, all units, probe) -> result: BH ran over exactly that unit set.
-        self._tests: dict[tuple[str, bool, str], pd.DataFrame] = {}
+        # (event, all units, probe, trial filter) -> result: BH ran over exactly that set.
+        self._tests: dict[tuple, pd.DataFrame] = {}
 
-    def _test_key(self, q: dict) -> tuple[str, bool, str]:
-        return q.get("event", ""), q.get("all") == "1", q.get("probe", "")
+    def _test_key(self, q: dict) -> tuple[str, bool, str, str]:
+        """A result belongs to one event, unit set, probe and trial filter."""
+        return q.get("event", ""), q.get("all") == "1", q.get("probe", ""), self._filter(q).key()
+
+    def _filter(self, q: dict) -> TrialFilter:
+        """The request's trial filter; no `tf` means every trial."""
+        return TrialFilter.from_dict(json.loads(q["tf"])) if q.get("tf") else TrialFilter()
+
+    def _trials(self, q: dict) -> tuple[pd.DataFrame, TrialSelection]:
+        sel = apply_trial_filter(self.session.trials, self._filter(q))
+        return self.session.trials[sel.mask], sel
+
+    @staticmethod
+    def _trial_note(sel: TrialSelection) -> str:
+        """For captions: how many trials the filters excluded, and why."""
+        if not sel.n_excluded:
+            return ""
+        why = ", ".join(f"{n} {reason}" for reason, n in sel.excluded.items())
+        return f" · trial filters kept {sel.n_kept} of {sel.n_total} ({why})"
 
     def _tested(self, q: dict) -> pd.DataFrame | None:
         return self._tests.get(self._test_key(q))
@@ -158,7 +191,7 @@ class Studio:
     def _params(self, q: dict):
         window = (float(q["t0"]), float(q["t1"]))
         baseline = (float(q["b0"]), float(q["b1"])) if q.get("baseline") == "1" else None
-        events = event_times(self.session.trials, q["event"])
+        events = event_times(self._trials(q)[0], q["event"])
         return window, float(q["bin"]), baseline, events
 
     def session_json(self, q: dict) -> dict:
@@ -182,12 +215,26 @@ class Studio:
                 if name in COMPARISONS
             },
             "selectivity": dict(self.selectivity_cfg.__dict__),
+            "trial_filters": available_trial_filters(self.session.trials),
+            "trial_levels": self._trial_levels(),
             "project": {
                 "path": None if self.project_path is None else str(self.project_path),
                 "view": self.view,
                 "warnings": self.warnings,
             },
         }
+
+    def _trial_levels(self) -> dict:
+        """The values the trial filters can choose from, in this session."""
+        trials, out = self.session.trials, {}
+        if "contrast" in available_conditions(trials):
+            levels = np.abs(condition(trials, "contrast").levels)
+            out["contrasts"] = sorted({float(v) for v in levels})
+        if "probabilityLeft" in trials:
+            out["blocks"] = list(condition(trials, "block").levels)
+        if "feedbackType" in trials:
+            out["outcomes"] = list(condition(trials, "outcome").levels)
+        return out
 
     def save(self, view: dict) -> dict:
         """Write the project file: source, hashes, configs and this view, never results."""
@@ -208,7 +255,7 @@ class Studio:
             ids = self._select({"all": q.get("all", "0"), "probe": q.get("probe", "")})
             if not ids:
                 raise ValueError("no units to test")
-            events = event_times(self.session.trials, q["event"])
+            events = event_times(self._trials(q)[0], q["event"])
             self._tests[key] = responsiveness(self.session.spikes, ids, events, self.response_cfg)
         return self._summary(self._tests[key])
 
@@ -257,10 +304,21 @@ class Studio:
             "tree": tree,
             "test": None if tested is None else self._summary(tested),
             "selectivity": None if chosen is None else self._selectivity_summary(chosen, q),
+            "trials": self._trial_summary(q),
         }
 
-    def _selectivity_key(self, q: dict) -> tuple[str, str, bool, str]:
-        return q.get("event", ""), q.get("split", ""), q.get("all") == "1", q.get("probe", "")
+    def _trial_summary(self, q: dict) -> dict:
+        _, sel = self._trials(q)
+        return {
+            "filter": self._filter(q).to_dict(),
+            "n_total": sel.n_total,
+            "n_kept": sel.n_kept,
+            "n_excluded": sel.n_excluded,
+            "excluded": sel.excluded,
+        }
+
+    def _selectivity_key(self, q: dict) -> tuple:
+        return (*self._test_key(q), q.get("split", ""))
 
     def selectivity_json(self, q: dict) -> dict:
         """Run (or reuse) the selectivity test for the split condition on the shown units."""
@@ -271,6 +329,7 @@ class Studio:
             ids = self._select({"all": q.get("all", "0"), "probe": q.get("probe", "")})
             if not ids:
                 raise ValueError("no units to test")
+            # The full table and a mask: block pseudo-sessions span the whole session.
             self._selectivity[key] = selectivity(
                 self.session.spikes,
                 ids,
@@ -279,6 +338,7 @@ class Studio:
                 q["split"],
                 self.response_cfg,
                 self.selectivity_cfg,
+                trial_mask=self._trials(q)[1].mask,
             )
         return self._selectivity_summary(self._selectivity[key], q)
 
@@ -351,14 +411,14 @@ class Studio:
         spikes = self.session.spikes[q["unit"]]
         region = self._regions(q)[q["unit"]]
         where = "" if pd.isna(region) else f" · {region}"
+        trials, sel = self._trials(q)
+        note = self._trial_note(sel)
         split = q.get("split", "")
         if split:
-            cond = condition(self.session.trials, split)
+            cond = condition(trials, split)
             colours = condition_colours(split, cond.levels, q.get("theme", "light"))
             groups = []
-            for part, colour in zip(
-                split_event_times(self.session.trials, q["event"], cond), colours
-            ):
+            for part, colour in zip(split_event_times(trials, q["event"], cond), colours):
                 if not np.isfinite(part.times).any():
                     continue  # e.g. error trials when aligned to reward feedback
                 trial, rel = raster(spikes, part.times, window)
@@ -368,14 +428,16 @@ class Studio:
             excluded = f", {cond.n_excluded} {cond.excluded} excluded" if cond.n_excluded else ""
             caption = (
                 f"{q['unit']}{where} · {EVENTS[q['event']][0]} · split by "
-                f"{CONDITIONS[split][0].lower()} · n = {n} trials{excluded}"
+                f"{CONDITIONS[split][0].lower()} · n = {n} trials{excluded}{note}"
             )
         else:
             p = psth(spikes, events, window, bin_width, baseline)
             trial, rel = raster(spikes, events, window)
             groups = [TraceGroup("all trials", None, p, trial, rel)]
-            caption = f"{q['unit']}{where} · {EVENTS[q['event']][0]} · n = {p.n_trials} trials" + (
-                f", {p.n_excluded} without this event excluded" if p.n_excluded else ""
+            caption = (
+                f"{q['unit']}{where} · {EVENTS[q['event']][0]} · n = {p.n_trials} trials"
+                + (f", {p.n_excluded} without this event excluded" if p.n_excluded else "")
+                + note
             )
         return {"groups": groups, "window": window, "baseline": baseline, "caption": caption}
 
@@ -385,13 +447,13 @@ class Studio:
         if not split:
             raise ValueError("choose a condition to split by for a tuning curve")
         window = self.response_cfg.response_window
-        curve = tuning_curve(
-            self.session.spikes[q["unit"]], self.session.trials, q["event"], split, window
-        )
-        cond = condition(self.session.trials, split)
+        trials, sel = self._trials(q)
+        curve = tuning_curve(self.session.spikes[q["unit"]], trials, q["event"], split, window)
+        cond = condition(trials, split)
         caption = (
             f"{q['unit']} · response rate {window[0] * 1000:g} to {window[1] * 1000:g} ms after "
             f"{EVENTS[q['event']][0].lower()}, by {CONDITIONS[split][0].lower()} · mean ± SEM"
+            f"{self._trial_note(sel)}"
         )
         return {"curve": curve, "levels": cond.levels, "caption": caption}
 
@@ -439,7 +501,7 @@ class Studio:
             f"{len(ids)} {which}units ({q.get('node') or 'all regions'}) · "
             f"{'probe' if len(included) == 1 else 'probes'} {', '.join(included)} · "
             f"{EVENTS[q['event']][0]} · sorted by peak time on odd trials (n = {sort_on.size}), "
-            f"showing even trials (n = {show.size})"
+            f"showing even trials (n = {show.size}){self._trial_note(self._trials(q)[1])}"
         )
         return {
             "units": rows,
@@ -486,35 +548,183 @@ def _static(path: str) -> Path | None:
     return target if target.is_file() and STATIC.resolve() in target.parents else None
 
 
-def make_handler(studio: Studio):
-    def as_json(fn):
-        return lambda q: (json.dumps(fn(q)).encode(), {})
+class App:
+    """The running server: the homepage catalog, and at most one open session."""
 
-    routes = {
-        "/api/session": ("application/json", as_json(studio.session_json)),
-        "/api/units": ("application/json", as_json(studio.units_json)),
-        "/api/probe": ("application/json", as_json(studio.probe_json)),
-        "/api/geometry": ("application/json", as_json(studio.geometry_json)),
-        "/api/test": ("application/json", as_json(studio.test_json)),
-        "/api/selectivity": ("application/json", as_json(studio.selectivity_json)),
-        "/api/tuning.png": ("image/png", studio.tuning_png),
-        "/api/unit.png": ("image/png", studio.unit_png),
-        "/api/population.png": ("image/png", studio.population_png),
-        "/": ("text/html; charset=utf-8", lambda q: ((HERE / "index.html").read_bytes(), {})),
+    def __init__(
+        self,
+        data: DataConfig,
+        studio: Studio | None = None,
+        manifest: Manifest | None = None,
+        loader=load_source,
+    ):
+        self.data = data
+        self.studio = studio
+        self.catalog_cfg = load_catalog_config()
+        self._manifest = manifest
+        self._loader = loader
+
+    @property
+    def manifest(self) -> Manifest:
+        if self._manifest is None:
+
+            def build() -> Manifest:
+                return build_manifest(self.data.bwm_ephys_root, self.data.bwm_behavior_root)
+
+            self._manifest = load_catalog(self.data.derived_root, build)
+        return self._manifest
+
+    def require(self) -> Studio:
+        if self.studio is None:
+            raise ValueError("No session is open: choose one on the homepage")
+        return self.studio
+
+    def _cached(self, eid: str) -> bool:
+        return SessionCache(self.data.cache_root).path(key_parts(eid, "bwm")).exists()
+
+    def home_json(self, q: dict) -> dict:
+        """Filter options, live counts, the region tree and the matching sessions."""
+        raw = json.loads(q.get("f") or "{}")
+        known = set(SessionFilter.__dataclass_fields__)
+        unknown = sorted(set(raw) - known)
+        if unknown:
+            raise ValueError(f"unknown session filters {unknown}")
+        if raw.get("region") and "min_region_units" not in raw:
+            raw["min_region_units"] = self.catalog_cfg.min_region_units
+        f = SessionFilter(**{k: tuple(v) if isinstance(v, list) else v for k, v in raw.items()})
+        m = self.manifest
+        matching = filter_sessions(m, f)
+        # The tree offers regions among sessions matching every filter but the region.
+        others = filter_sessions(m, dataclasses.replace(f, region=None, min_region_units=0))
+        column = q.get("sort") or "date"
+        if column not in _SORTABLE:
+            raise ValueError(f"cannot sort by {column!r}")
+        matching = matching.sort_values(
+            [column, "eid"], ascending=q.get("desc") != "1", kind="stable"
+        )
+        rows = matching.assign(
+            n_regions=matching["regions"].map(len),
+            cached=matching["eid"].map(self._cached),
+        )
+        keep = [c for c in (*_SORTABLE, "eid", "regions", "cached", "region_units") if c in rows]
+        s = m.sessions
+        return {
+            "summary": summary(m, matching),
+            "sessions": _records(rows[keep]),
+            "tree": region_counts(m, others["eid"], q.get("level") or DEFAULT_LEVEL),
+            "options": {
+                "labs": sorted(s["lab"].unique()),
+                "subjects": sorted(s["subject"].unique()),
+                "dates": [s["date"].min(), s["date"].max()],
+                "n_probes": sorted(int(n) for n in s["n_probes"].unique()),
+                "modalities": sorted({x for mods in s["modalities"] for x in mods}),
+                "min_region_units": self.catalog_cfg.min_region_units,
+                "trial_levels": _BWM_TRIAL_LEVELS,
+                "default_trial_filter": TrialFilter.from_dict(
+                    self.catalog_cfg.default_trial_filter
+                ).to_dict(),
+            },
+            "notes": {
+                "units": "Units are the release's good units, not Studio's QC count "
+                "(d23a44ef: the release lists 398, Studio's QC passes 390).",
+                "manifest": m.provenance,
+            },
+            "open": None if self.studio is None else self.studio.session.eid,
+        }
+
+    def open(self, body: dict) -> dict:
+        """Load a session and make it the open one. Everything cached is dropped."""
+        if body.get("kind") != "ibl" or not body.get("eid"):
+            raise ValueError("open needs {kind: 'ibl', eid: ...}")
+        source = Source(kind="ibl", eid=str(body["eid"]), backend="bwm")
+        session, qc = self._loader(source)
+        if "trials" in body:
+            chosen = TrialFilter.from_dict(body["trials"])
+            apply_trial_filter(session.trials, chosen)  # refuses a filter it can't apply
+        else:
+            chosen = default_trials(session.trials, self.catalog_cfg)
+        view = {**DEFAULT_VIEW, "trials": chosen.to_dict()}
+        path = _new_project_path(self.data.data_root / "projects", source.eid[:8])
+        self.studio = Studio(session, qc, self.data.data_root / "atlas", source, path, view)
+        return {"eid": session.eid, "url": "/session"}
+
+
+def default_trials(trials: pd.DataFrame, cfg) -> TrialFilter:
+    """configs/catalog.yaml's default trial filter, minus what this session can't support."""
+    offered = available_trial_filters(trials)
+    default = cfg.default_trial_filter
+    return TrialFilter.from_dict({k: v for k, v in default.items() if offered[k]["available"]})
+
+
+# Session-list columns the homepage can sort by.
+_SORTABLE = (
+    "lab",
+    "subject",
+    "date",
+    "n_probes",
+    "n_good_units",
+    "n_trials",
+    "n_included_trials",
+    "n_regions",
+)
+# Every BWM session runs the same task, so the homepage offers these trial filters.
+_BWM_TRIAL_LEVELS = {
+    "contrasts": [0.0, 0.0625, 0.125, 0.25, 1.0],
+    "blocks": [0.2, 0.5, 0.8],
+    "outcomes": [-1.0, 1.0],
+}
+# path -> Studio method answering it; these need an open session.
+_SESSION_ROUTES = {
+    "/api/session": ("application/json", "session_json"),
+    "/api/units": ("application/json", "units_json"),
+    "/api/probe": ("application/json", "probe_json"),
+    "/api/geometry": ("application/json", "geometry_json"),
+    "/api/test": ("application/json", "test_json"),
+    "/api/selectivity": ("application/json", "selectivity_json"),
+    "/api/tuning.png": ("image/png", "tuning_png"),
+    "/api/unit.png": ("image/png", "unit_png"),
+    "/api/population.png": ("image/png", "population_png"),
+}
+_JSON_METHODS = {name for ctype, name in _SESSION_ROUTES.values() if ctype == "application/json"}
+
+
+def make_handler(app: "App | Studio"):
+    if isinstance(app, Studio):  # a single session, as before the homepage
+        app = App(load_data_config(), studio=app)
+
+    def page(name: str) -> bytes:
+        return (HERE / name).read_bytes()
+
+    posts = {
+        "/api/open": app.open,
+        "/api/project": lambda view: app.require().save(view),
+        "/api/export": lambda view: app.require().export(view),
     }
-    posts = {"/api/project": studio.save, "/api/export": studio.export}
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             url = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(url.query).items()}
             try:
-                if url.path in routes:
-                    ctype, fn = routes[url.path]
-                    body, headers = fn(q)
+                if url.path == "/":
+                    return self._send(200, "text/html; charset=utf-8", page("home.html"))
+                if url.path == "/session":
+                    if app.studio is None:  # nothing open: back to the homepage
+                        return self._redirect("/")
+                    return self._send(200, "text/html; charset=utf-8", page("index.html"))
+                if url.path == "/api/home":
+                    body = json.dumps(app.home_json(q)).encode()
+                    return self._send(200, "application/json", body)
+                if url.path in _SESSION_ROUTES:
+                    ctype, name = _SESSION_ROUTES[url.path]
+                    result = getattr(app.require(), name)(q)
+                    if name in _JSON_METHODS:
+                        return self._send(200, ctype, json.dumps(result).encode())
+                    body, headers = result
                     return self._send(200, ctype, body, headers)
                 if match := _MESH.match(url.path):
-                    return self._send(200, "text/plain", studio.mesh(int(match.group(1))))
+                    mesh = app.require().mesh(int(match.group(1)))
+                    return self._send(200, "text/plain", mesh)
                 if url.path.startswith("/static/") and (path := _static(url.path)):
                     ctype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
                     return self._send(200, ctype, path.read_bytes())
@@ -538,10 +748,16 @@ def make_handler(studio: Studio):
             if fn is None:
                 return self._send(404, "text/plain", b"not found")
             try:
-                view = json.loads(self.rfile.read(length) or b"{}")
-                self._send(200, "application/json", json.dumps(fn(view)).encode())
+                body = json.loads(self.rfile.read(length) or b"{}")
+                self._send(200, "application/json", json.dumps(fn(body)).encode())
             except (ValueError, KeyError, OSError) as e:
                 self._send(400, "text/plain; charset=utf-8", f"Cannot do this: {e}".encode())
+
+        def _redirect(self, where: str):
+            self.send_response(302)
+            self.send_header("Location", where)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
         def _send(self, code, ctype, body, headers=None):
             self.send_response(code)
@@ -566,9 +782,10 @@ def _new_project_path(root: Path, name: str) -> Path:
     return path
 
 
-def main() -> None:
+def build_app(argv: list[str]) -> tuple[App, str]:
+    """(App, the path to open first). No data flags: the homepage. Otherwise a session."""
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--eid", help="an IBL session (default d23a44ef-1402-4ed7-97f5-47e9a7a504d9)")
+    ap.add_argument("--eid", help="an IBL session; skips the homepage")
     ap.add_argument("--backend", default="bwm")
     ap.add_argument("--phy", help="a Kilosort/Phy output folder (one probe); needs --events")
     ap.add_argument("--events", help="CSV of trial events, seconds on the probe's clock")
@@ -578,12 +795,14 @@ def main() -> None:
         help=f"a *{SUFFIX} file: alone, opens it; with a data source, saves a new one there",
     )
     ap.add_argument("--port", type=int, default=8765)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     if bool(args.phy) != bool(args.events):
         ap.error("--phy and --events go together")
     if args.phy and args.eid:
         ap.error("choose one data source: --eid or --phy")
     data = load_data_config()
+    if not (args.project or args.phy or args.eid):
+        return App(data), "/"
     view, warnings = None, []
     if args.project and not (args.phy or args.eid):
         if not args.project.exists():
@@ -599,19 +818,35 @@ def main() -> None:
                 events=str(Path(args.events).resolve()),
             )
         else:
-            source = Source(kind="ibl", eid=args.eid or DEFAULT_EID, backend=args.backend)
+            source = Source(kind="ibl", eid=args.eid, backend=args.backend)
         if args.project and args.project.exists():
             ap.error(f"{args.project} exists; open it with --project alone, or choose a new name")
         name = Path(source.folder).name if source.kind == "phy" else source.eid[:8]
         path = args.project or _new_project_path(data.data_root / "projects", name)
         session, qc = load_source(source)
+        # The same default as opening from the homepage; a project keeps its own.
+        trials = default_trials(session.trials, load_catalog_config())
+        view = {**DEFAULT_VIEW, "trials": trials.to_dict()}
     studio = Studio(session, qc, data.data_root / "atlas", source, path, view, warnings)
-    print(f"Neurodecoder Studio: http://127.0.0.1:{args.port}  ({session.eid})", flush=True)
-    print(f"Project file: {path}", flush=True)
-    for warning in warnings:
-        print(f"Warning: {warning}", flush=True)
+    return App(data, studio=studio), "/session"
+
+
+def main() -> None:
+    import sys
+
+    app, first = build_app(sys.argv[1:])
+    port = next((int(a.split("=")[1]) for a in sys.argv if a.startswith("--port=")), None)
+    if port is None and "--port" in sys.argv:
+        port = int(sys.argv[sys.argv.index("--port") + 1])
+    port = port or 8765
+    opened = "" if app.studio is None else f"  ({app.studio.session.eid})"
+    print(f"Neurodecoder Studio: http://127.0.0.1:{port}{first}{opened}", flush=True)
+    if app.studio is not None:
+        print(f"Project file: {app.studio.project_path}", flush=True)
+        for warning in app.studio.warnings:
+            print(f"Warning: {warning}", flush=True)
     # Threads, so a long responsiveness test doesn't hold up the plots.
-    ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(studio)).serve_forever()
+    ThreadingHTTPServer(("127.0.0.1", port), make_handler(app)).serve_forever()
 
 
 if __name__ == "__main__":

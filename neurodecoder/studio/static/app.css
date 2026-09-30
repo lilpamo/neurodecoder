@@ -116,3 +116,8 @@ td.resp { text-align: center; }
 .project .btn, .seg { flex: none; }
 .seg.probes { margin-top: 10px; flex-wrap: wrap; }
 .seg.probes button { display: inline-flex; align-items: center; gap: 5px; }
+.trialbox { display: grid; gap: 6px; font-size: 12px; }
+.trialbox .row { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: center; }
+.trialbox .lbl { color: var(--muted); width: 64px; }
+.trialbox label.off { color: var(--muted); }
+.topbar > a.btn { margin: 0; text-decoration: none; color: var(--ink); }

@@ -6,6 +6,82 @@ first.
 
 ---
 
+### 2026-09-30 — Homepage and data selection, part (a) (`analysis/catalog.py`, trial filters in `analysis/conditions.py`, `studio/`)
+
+**Homepage:**
+- **Starting up:** the server starts with no session and serves a homepage at `/`.
+  Opening a session is a guarded POST (the existing Origin and Content-Type
+  checks) with a visible loading state, then `/session`, with a Home link back.
+- **Old flags:** `--eid`, `--phy` and `--project` still open a session directly and
+  print its `/session` URL.
+- **Switching session** replaces the Studio object, so selections, caches and test
+  results start empty.
+
+**Manifest version 2 (`data/manifest.py`)**, bumped for two additions:
+- **`region_units`:** the release's good units per Allen acronym per probe, so the
+  region filter can count any node's descendants.
+- **Motion energy and pupil modalities,** read from each session shard's
+  `meta.json` by the same rule the BWM backend uses. A real-data test checks that
+  d23a44ef's listed modalities equal what the backend loads.
+- **Why not "wheel and pose only":** the user offered labelling the behaviour
+  filter that way instead. But Studio already loads motion energy and pupil, the
+  version was being bumped anyway, and reading all 459 shards' metadata takes
+  0.9 s.
+- **Consequence:** Phase 3's saved split files record manifest version 1, and
+  `splits/guards.py` rejects them against version 2. Phase 3 is parked.
+
+**Where the catalog lives:** `data_root/derived/manifest-v2/` (sessions,
+insertions, region_units and provenance). It is built on first start (about 1 s)
+and read afterwards. A new manifest version gets a new folder, so new code never
+reads an old copy.
+
+**Session filters and counts** are in `analysis/catalog.py`; the page only draws
+them.
+- **The filters:**
+  - lab, subject and date range;
+  - a region, with descendants and at least `min_region_units` good units (10 by
+    default, in `configs/catalog.yaml`, adjustable on the page);
+  - minimum good units, minimum included trials, and number of probes;
+  - behaviour modalities, all required.
+- **Unit counts are the release's good units, labelled as such.** d23a44ef lists
+  398; Studio's QC passes 390.
+- **Real example:** HPF with at least 10 units, left-camera pupil, and at least
+  100 good units gives 73 sessions, 125 probes, 15,418 units, 2,965 of them in
+  HPF.
+
+**Trial filters, one definition:** `TrialFilter` in `analysis/conditions.py`, on
+step 5's condition definitions.
+- **The filters:** `bwm_include`, excluding no-go, contrasts, blocks and outcomes.
+- **Counting:** every excluded trial is counted under each reason it fails, and
+  once in the total. Captions give the count kept and why the rest were excluded.
+- **Records:** the filter's canonical key is part of the responsiveness and
+  selectivity cache keys. A test checks a result is never shown under another
+  filter.
+- **Projects and exports:** the filter is part of the project view (older files
+  open on all trials, as they were computed) and of every export sidecar.
+- **Block selectivity** under a filter gets the full trial table plus a mask, so
+  pseudo-sessions keep IBL's block structure.
+- **Phy sessions** offer only the filters their events CSV supports, with the
+  reason shown for the rest (for example, "trials have no bwm_include column").
+
+**Default trial filter: `bwm_include` and exclude no-go** (`configs/catalog.yaml`),
+applied when a session is opened from the homepage or with `--eid`/`--phy`,
+minus what the session can't support.
+- **What `bwm_include` is on d23a44ef:** exactly a reaction-time window. All 120
+  excluded trials have first movement less than 80 ms (58) or more than 2 s (62)
+  after stimulus onset.
+- **Why:** those are anticipatory and disengaged trials, which muddy
+  stimulus-onset responses, and the release's own analyses use the same rule.
+- **Before and after on d23a44ef:**
+
+  | | Trials | Responsive at stimulus onset | Responsive at error feedback |
+  |---|---|---|---|
+  | All trials | 410 | 320 of 390 | 183 of 390 |
+  | `bwm_include` | 290 | 301 of 390 | 153 of 390 (67 error trials, was 106) |
+
+- **Not filtered:** unit QC still uses every trial for its task-period rate. QC
+  decides whether a unit is valid, not what an analysis includes.
+
 ### 2026-09-30 — Condition-split PSTHs, tuning curves and selectivity (`analysis/conditions.py`, `analysis/tuning.py`, `configs/selectivity.yaml`)
 
 **What (the user's step 5):**

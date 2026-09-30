@@ -185,7 +185,7 @@ names the file.
 - A changed spike file triggers the hash warning.
 - The exported sidecar equals the engine's output.
 
-## Planned, not built: steps 5–14
+## Further steps: 4b and 5–14 (each marked planned or built)
 
 Each step says:
 - what it adds;
@@ -197,6 +197,74 @@ Each step says:
 
 As in steps 1–4, the engine goes in `analysis/`, the UI draws only, and a test is
 written first where the contract is clear.
+
+## 4b. Homepage and data selection — part (a) built, part (b) planned (2026-09-30)
+
+Added before step 5, as **4b** so the later steps keep their numbers.
+
+**Part (a) as built** (`docs/DECISIONS.md`, "Homepage and data selection, part
+(a)"), with these differences from the plan below:
+- The manifest went to version 2, with `region_units` plus motion-energy and pupil
+  modalities; it is stored in `derived/manifest-v2/`.
+- The default trial filter is `bwm_include` plus excluding no-go, set in
+  `configs/catalog.yaml`. It also applies to sessions opened with `--eid` or
+  `--phy`.
+
+**Part (a): the homepage, filters, trial filters and opening a session.**
+- **Starting up:** the server starts with no session and serves a homepage at
+  `/`. Opening a session is a POST behind the existing Origin and Content-Type
+  checks. It loads through `load_session` with a visible loading state, then
+  shows the session view, with a Home link back. `--eid`, `--phy` and
+  `--project` still skip the homepage.
+- **Switching session** resets the unit selection, caches and test results.
+- **Session list:** built from the BWM manifest (`data/manifest.py`), written once
+  under `derived/` if no copy exists. Filtering and counts live in
+  `analysis/catalog.py`, not the page. It shows a sortable table (lab, subject,
+  date, probes, units, trials, included trials, Beryl regions) and marks
+  sessions already in the local cache.
+- **Session filters,** with live counts ("N sessions, M probes, K units match"):
+  - lab, subject and date range;
+  - a region from the iblatlas tree, with descendants and a minimum number of
+    units in configs;
+  - minimum good units, minimum included trials, and number of probes;
+  - behaviour modalities.
+- **Unit counts are labelled** as the release's good units, not Studio's QC
+  count. For d23a44ef, Studio QC passes 390 of the release's 398.
+- **Trial filters** (per trial: every BWM session runs the same task):
+  - `bwm_include`, contrasts, block, outcome, and excluding no-go trials.
+  - They are built on step 5's `analysis/conditions.py` definitions, so there is
+    one definition only.
+  - Excluded trials are counted, and every caption gives the trial count after
+    filtering.
+  - The filters are part of the responsiveness and selectivity cache keys, the
+    project file and the export records.
+  - Phy sessions offer only what their events CSV has, with the reason shown for
+    the rest.
+- **Tests:**
+  - each session filter on a hand-built manifest;
+  - region counts with descendants;
+  - trial-filter counts, with excluded trials counted;
+  - a test result is never shown under another trial filter;
+  - a project round trip with trial filters;
+  - no session at start, old flags skip the homepage, and switching resets state.
+
+**Part (b): 3D overview, session sets, Phy folders, recent projects.**
+- **3D overview:** every matching probe drawn from the manifest's tip and top
+  positions, converted to CCF by `analysis/atlas.py`, coloured by lab. Hovering
+  names the session and probe; clicking opens it. It updates with the filters.
+- **Session sets:** named JSON files holding eids, the manifest version, the
+  filters used and a hash. Reopening one warns if the manifest version changed.
+  Step 12 will use them. The session view still holds one session at a time.
+- **"Open a Phy folder":** a path field completing against a configured Phy root,
+  pairing each folder with the `events.csv` beside its `params.py`. It refuses
+  paths outside the root, traversal and symlinks out, and missing files are
+  refused in plain language.
+- **Recent projects** from `data_root/projects`, newest first.
+- **Tests:**
+  - probe lines converted exactly as unit positions are;
+  - a session-set round trip, and the warning on a changed manifest version;
+  - Phy path refusals;
+  - the recent-projects list matches the folder.
 
 ## 5. Condition-split PSTHs and tuning — built (2026-09-30)
 
@@ -389,24 +457,22 @@ pseudo-sessions for block.
 - The guards refuse a random time-point split.
 - The page renders all six rows and the verdict.
 
-## 11. Session picker and unit browsing
+## 11. Unit browsing (session picking moved to step 4b)
 
 **Adds:**
-- **Opening sessions:** a list of cached IBL sessions (from the data manifest)
-  and of Phy folders under a configured root, with a path field that completes
-  against those roots. This resolves step 1's folder-picker question.
+- **Opening sessions: replaced by step 4b** (homepage and data selection), which
+  covers the session list, Phy folders and the folder-picker question.
 - **Browsing units:** unit search by id or region, next and previous with the
   keyboard, and pinned units.
 
 **Null:** none. There are no labels.
 
-**Phy data:** needs a configured root and a rule for pairing each folder with its
-events CSV (by default `events.csv` beside `params.py`).
+**Phy data:** nothing beyond step 4b.
 
 **Tests:**
-- Listing matches the manifest.
-- Paths outside the configured roots are refused, including traversal.
-- Switching session resets the selection, caches and responsiveness results.
+- Search by id and region.
+- Keyboard next and previous follow the table's order.
+- Pinned units survive a filter change.
 
 ## 12. Across-session region summaries
 

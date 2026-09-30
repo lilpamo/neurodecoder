@@ -177,3 +177,14 @@ def test_selectivity_reports_counts_and_refuses_what_it_cannot_test():
         selectivity(units, ["u"], trials, "stim_on", "side", WINDOWS, few)
     with pytest.raises(ValueError, match="choice"):
         selectivity(units, ["u"], trials.drop(columns="choice"), "stim_on", "side", WINDOWS, SEL)
+
+
+def test_a_trial_mask_restricts_trials_but_keeps_the_block_structure():
+    rng = np.random.default_rng(6)
+    trials = _task(rng, 400)
+    units = {"u": _poisson(rng, np.full(400, 8.0), trials)}
+    mask = np.arange(400) % 2 == 0
+    full = selectivity(units, ["u"], trials, "stim_on", "block", WINDOWS, SEL).iloc[0]
+    half = selectivity(units, ["u"], trials, "stim_on", "block", WINDOWS, SEL, trial_mask=mask)
+    assert half.iloc[0]["n_a"] + half.iloc[0]["n_b"] < full["n_a"] + full["n_b"]
+    assert half.iloc[0]["null"] == "pseudo-sessions from IBL's block generator"

@@ -115,3 +115,13 @@ def test_older_projects_without_a_probe_open_on_all_probes(tmp_path):
     project, session, qc, warnings = open_project(path)
     assert warnings == []
     assert Studio(session, qc, tmp_path, view=project["view"]).view["probe"] == ""
+
+
+def test_trial_filters_round_trip_through_a_project(tmp_path):
+    source = _source(tmp_path)
+    session, qc = load_source(source)
+    view = {**VIEW, "trials": {"outcomes": [1.0], "exclude_nogo": True}}
+    path = tmp_path / "filtered.ndstudio.json"
+    save_project(make_project(source, session, qc, view), path)
+    project, _, _, warnings = open_project(path)
+    assert warnings == [] and project["view"]["trials"] == {"outcomes": [1.0], "exclude_nogo": True}

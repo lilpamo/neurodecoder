@@ -100,6 +100,7 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
         traces = [trace(g) for g in d["groups"]]
         sidecar = {
             "caption": d["caption"],
+            "trials": studio._trial_summary(q),
             "unit": view["unit"],
             "split": view.get("split") or None,
             "window_s": d["window"],
@@ -132,7 +133,11 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
                 save_vector(fig, out / f"tuning.{suffix}")
             _write_json(
                 out / "tuning.json",
-                {"caption": t["caption"], "levels": curve.reset_index().to_dict(orient="list")},
+                {
+                    "caption": t["caption"],
+                    "trials": studio._trial_summary(q),
+                    "levels": curve.reset_index().to_dict(orient="list"),
+                },
             )
             files += ["tuning.svg", "tuning.pdf", "tuning.json"]
 
@@ -150,7 +155,7 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
     )
     for suffix in ("svg", "pdf"):
         save_vector(fig, out / f"population.{suffix}")
-    _write_json(out / "population.json", d)
+    _write_json(out / "population.json", {**d, "trials": studio._trial_summary(q)})
     files += ["population.svg", "population.pdf", "population.json"]
 
     tested = studio._tested(q)

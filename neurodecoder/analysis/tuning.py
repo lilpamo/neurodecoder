@@ -159,9 +159,13 @@ def selectivity(
     windows: ResponseConfig,
     cfg: SelectivityConfig,
     stratify: bool = True,
+    trial_mask: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """(n_units, ...) auroc, p, q, selective, n_a, n_b, n_null, n_tests, null, window.
 
+    trial_mask: (n_trials,) trials to use (a trial filter). The full table is still
+    passed, so block pseudo-sessions are generated over the whole session and then
+    masked, keeping IBL's block structure intact.
     stratify=False replaces the null with a plain label permutation: only to show why
     the stratified and pseudo-session nulls are needed.
     """
@@ -174,6 +178,10 @@ def selectivity(
     values = condition(trials, name).values
     events = trial_event_times(trials, event)
     keep = np.isfinite(events) & np.isin(values, (level_a, level_b))
+    if trial_mask is not None:
+        trial_mask = np.asarray(trial_mask, bool)
+        assert trial_mask.shape == keep.shape, "trial_mask must be (n_trials,)"
+        keep &= trial_mask
     strata = None
     if stratify and name != "block":
         strata = _strata(trials, name)

@@ -5,7 +5,7 @@ import { OrbitControls } from '/static/vendor/three/OrbitControls.js';
 import { OBJLoader } from '/static/vendor/three/OBJLoader.js';
 
 const $ = (id) => document.getElementById(id);
-const state = { session: null, level: null, node: '', all: false, responsive: false, probe: '', split: '', unit: null, rows: [], tree: [], popRows: null, box: null };
+const state = { session: null, level: null, node: '', all: false, responsive: false, probe: '', split: '', trials: {}, unit: null, rows: [], tree: [], popRows: null, box: null };
 
 // ---------- helpers ----------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -22,7 +22,8 @@ function params(extra = {}) {
   const p = new URLSearchParams({
     event: $('event').value, t0: $('t0').value, t1: $('t1').value, bin: $('bin').value,
     baseline: $('baseline').checked ? 1 : 0, b0: $('b0').value, b1: $('b1').value,
-    all: state.all ? 1 : 0, node: state.node, probe: state.probe, split: state.split, responsive: state.responsive ? 1 : 0, theme: theme(), ...extra,
+    all: state.all ? 1 : 0, node: state.node, probe: state.probe, split: state.split, tf: JSON.stringify(state.trials),
+    responsive: state.responsive ? 1 : 0, theme: theme(), ...extra,
   });
   if (state.level) p.set('level', state.level);
   return p;
@@ -72,6 +73,8 @@ async function init() {
   state.unit = v.unit;
   state.probe = s.probes.includes(v.probe) ? v.probe : '';
   state.split = s.conditions[v.split] ? v.split : '';
+  state.trials = v.trials || {};
+  renderTrialFilters();
   $('split').value = state.split;
   renderProbes();
   state.level = noRegion ? null : (s.levels.includes(v.level) ? v.level : s.default_level);
@@ -110,6 +113,7 @@ function currentView() {
     baseline: $('baseline').checked, b0: +$('b0').value, b1: +$('b1').value,
     level: state.level || state.session.default_level, node: state.node,
     all: state.all, responsive: state.responsive, unit: state.unit, probe: state.probe, split: state.split,
+    trials: state.trials,
   };
 }
 async function post(url, body) {
@@ -131,6 +135,7 @@ async function loadUnits() {
   state.tree = d.tree;
   renderTest(d.test);
   renderSelectivity(d.selectivity);
+  renderTrialCounts(d.trials);
   if (!state.rows.some((u) => u.id === state.unit)) state.unit = state.rows.length ? state.rows[0].id : null;
   renderTree();
   renderTable();
@@ -183,6 +188,43 @@ async function runTest() {
 }
 // A test belongs to one event and one unit set; changing either drops the filter.
 function resetResponsive() { state.responsive = false; $('responsive').checked = false; }
+
+// ---------- rail: trial filters ----------
+// Set on the homepage (or in the project); changeable here. The server applies them.
+function renderTrialFilters() {
+  const s = state.session, t = state.trials, offered = s.trial_filters, lv = s.trial_levels;
+  const off = (name) => (offered[name].available ? '' : `disabled title="${esc(offered[name].reason)}"`);
+  const cls = (name) => (offered[name].available ? '' : 'off');
+  const boxes = (name, label, values, fmt) => !values ? `<div class="row ${cls(name)}"><span class="lbl">${label}</span><span class="note">${esc(offered[name].reason)}</span></div>` :
+    `<div class="row"><span class="lbl">${label}</span>` + values.map((v) =>
+      `<label><input type="checkbox" data-f="${name}" value="${v}" ${!(t[name] || []).length || t[name].includes(v) ? 'checked' : ''}> ${esc(fmt(v))}</label>`).join('') + '</div>';
+  $('trialFilters').innerHTML =
+    `<label class="check ${cls('bwm_include')}"><input type="checkbox" data-f="bwm_include" ${t.bwm_include ? 'checked' : ''} ${off('bwm_include')}> BWM trial inclusion only</label>` +
+    `<label class="check ${cls('exclude_nogo')}"><input type="checkbox" data-f="exclude_nogo" ${t.exclude_nogo ? 'checked' : ''} ${off('exclude_nogo')}> Exclude no-go</label>` +
+    boxes('contrasts', 'Contrasts', lv.contrasts, (v) => `${v * 100}%`) +
+    boxes('blocks', 'Blocks', lv.blocks, (v) => `${v}`) +
+    boxes('outcomes', 'Outcomes', lv.outcomes, (v) => (v < 0 ? 'error' : 'reward'));
+}
+function readTrialFilters() {
+  const t = {}, box = $('trialFilters');
+  for (const name of ['bwm_include', 'exclude_nogo']) {
+    const i = box.querySelector(`input[data-f="${name}"]`);
+    t[name] = Boolean(i && i.checked && !i.disabled);
+  }
+  for (const name of ['contrasts', 'blocks', 'outcomes']) {
+    const all = [...box.querySelectorAll(`input[data-f="${name}"]`)];
+    const on = all.filter((i) => i.checked).map((i) => +i.value);
+    t[name] = on.length === all.length ? [] : on;  // all ticked means no filter
+  }
+  return t;
+}
+function renderTrialCounts(c) {
+  if (!c) return;
+  const why = Object.entries(c.excluded).map(([r, n]) => `${n} ${r}`).join(', ');
+  $('trialCounts').textContent = c.n_excluded
+    ? `${c.n_kept} of ${c.n_total} trials kept · excluded: ${why}`
+    : `All ${c.n_total} trials kept.`;
+}
 
 // ---------- rail: selectivity ----------
 function renderSelectivity(t) {
@@ -501,6 +543,11 @@ $('all').addEventListener('change', () => { state.all = $('all').checked; resetR
 $('runTest').addEventListener('click', runTest);
 $('runSel').addEventListener('click', runSelectivity);
 $('split').addEventListener('change', () => { state.split = $('split').value; loadUnits(); });
+$('trialFilters').addEventListener('change', () => {
+  state.trials = readTrialFilters();
+  resetResponsive();  // test results belong to the trials they used
+  loadUnits();
+});
 $('probeFilter').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b || b.dataset.v === state.probe) return;
