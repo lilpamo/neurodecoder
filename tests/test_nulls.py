@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -225,3 +228,50 @@ def test_targets_without_a_defined_null_raise():
 
 def test_default_config():
     assert load_null_config() == CFG
+
+
+def test_pseudo_blocks_follow_the_ibl_protocol():
+    from neurodecoder.evaluation.nulls import generate_pseudo_blocks
+
+    p = generate_pseudo_blocks(600, seed=3)
+    assert p.shape == (600,) and (p[:90] == 0.5).all()
+    assert set(np.unique(p[90:])) <= {0.2, 0.8}
+    change = np.flatnonzero(np.diff(p[90:]) != 0) + 1
+    lengths = np.diff(np.concatenate([[0], change]))
+    assert ((lengths >= 20) & (lengths < 100)).all()
+    assert np.array_equal(p, generate_pseudo_blocks(600, seed=3))
+    assert not np.array_equal(p, generate_pseudo_blocks(600, seed=4))
+    assert (generate_pseudo_blocks(50, seed=0) == 0.5).all()
+
+
+_TRIALS = Path(os.environ.get("NEURODECODER_DATA_ROOT", "~/data/neurodecoder")).expanduser() / (
+    "bwm_compressed/bwm_ephys/1.2.1/metadata/trials.parquet"
+)
+
+
+@pytest.mark.skipif(not _TRIALS.exists(), reason="BWM release not available")
+def test_pseudo_block_lengths_match_the_release():
+    from scipy.stats import ks_2samp
+
+    from neurodecoder.evaluation.nulls import generate_pseudo_blocks
+
+    def complete_block_lengths(prior):
+        prior = prior[prior != 0.5]
+        change = np.flatnonzero(np.diff(prior) != 0) + 1
+        lengths = np.diff(np.concatenate([[0], change, [len(prior)]]))
+        return lengths[:-1]  # the last block is cut short by the session's end
+
+    trials = pd.read_parquet(_TRIALS, columns=["eid", "trial_id", "probabilityLeft"])
+    # BWM ephys sessions replay a few pre-generated block sequences (18 distinct openings
+    # across 459 sessions), so each distinct sequence counts once, not once per session.
+    sequences = {
+        tuple(complete_block_lengths(t.sort_values("trial_id").probabilityLeft.to_numpy()))
+        for _, t in trials.groupby("eid")
+    }
+    real = np.concatenate([np.array(seq) for seq in sequences])
+    fake = np.concatenate(
+        [complete_block_lengths(generate_pseudo_blocks(700, seed=s)) for s in range(400)]
+    )
+    assert len(real) > 150
+    assert abs(np.mean(real) - np.mean(fake)) < 4.0
+    assert ks_2samp(real, fake).pvalue > 0.05

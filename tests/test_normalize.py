@@ -197,3 +197,31 @@ def test_real_session_round_trips_through_normalisation():
     # float32 keeps ~7 significant digits; counts are at most a few tens.
     np.testing.assert_allclose(back, binned.counts, atol=1e-3)
     assert np.array_equal(np.rint(back).astype(np.uint16), binned.counts)
+
+
+def test_leave_one_block_out_fits_each_fold_on_its_training_intervals_only():
+    from neurodecoder.splits.registry import leave_one_block_out
+
+    prior = [0.5] * 5 + [p for b in range(5) for p in [[0.8, 0.2][b % 2]] * 4]
+    starts = 1.0 + 3.5 * np.arange(len(prior))
+    trials = {
+        "e00": pd.DataFrame(
+            {"intervals_0": starts, "intervals_1": starts + 3.0, "probabilityLeft": prior}
+        )
+    }
+    split = leave_one_block_out(_manifest(), trials, PREPROC, gap_s=2.0)
+    b = _binned("e00", 0)
+    for k, fold in enumerate(split.sessions["e00"]["folds"]):
+        norm = fit_normalizer(split, {"e00": b}, PREPROC, fold=k)
+        assert norm.mode == "per_unit" and norm.split_hash.endswith(f"#fold{k}")
+        # Overwriting the fold's test block (and the gap) never changes its statistics.
+        first = int(np.floor(fold["blocks"]["test"][0] * 50))
+        last = int(np.floor(fold["blocks"]["test"][1] * 50))
+        counts = b.counts.copy()
+        counts[:, first : last + 1] = 50
+        again = fit_normalizer(
+            split, {"e00": dataclasses.replace(b, counts=counts)}, PREPROC, fold=k
+        )
+        assert again.hash == norm.hash
+    with pytest.raises(ValueError, match="fold is required"):
+        fit_normalizer(split, {"e00": b}, PREPROC)

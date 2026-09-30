@@ -21,6 +21,9 @@ sessions:
 split:
   train_fraction: 0.8
   gap_s: 2.0
+  # Adopted after the first table (docs/DECISIONS.md): block is evaluated
+  # leave-one-block-out, every biased block held out once with the same gap.
+  leave_one_block_out: [block]
 
 # Evaluated in this order: the fast trial targets first, movement state last.
 targets: [choice, block, wheel_velocity, movement_state]

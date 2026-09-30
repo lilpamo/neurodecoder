@@ -15,7 +15,14 @@ from neurodecoder.models.baselines.features import (
     gapped_folds,
     load_baseline_config,
 )
-from neurodecoder.models.baselines.linear import LogisticDecoder, RidgeDecoder, fit_ridge
+from neurodecoder.models.baselines.linear import (
+    GramSums,
+    LogisticDecoder,
+    RidgeDecoder,
+    SpikesAndTaskLogistic,
+    SpikesAndTaskRidge,
+    fit_ridge,
+)
 
 CV = CVConfig(n_folds=5, lambdas=tuple(np.logspace(-4, 4, 17)))
 N_UNITS, N_BINS, CONTEXT = 6, 4000, 50
@@ -163,3 +170,77 @@ def test_default_config():
     assert (cfg.per_bin_context_bins, cfg.per_bin_chunks, cfg.trial_chunks) == (50, 5, 1)
     assert cfg.cv.n_folds == 5 and len(cfg.cv.lambdas) == 17
     assert cfg.cv.lambdas[0] == pytest.approx(1e-4) and cfg.cv.lambdas[-1] == pytest.approx(1e4)
+    np.testing.assert_allclose(cfg.task_penalty_ratios, [0.01, 0.1, 1.0, 10.0, 100.0])
+    assert cfg.n_jobs == 6
+
+
+def test_penalty_weights_match_sklearn_on_rescaled_features():
+    rng = np.random.default_rng(7)
+    x = (rng.normal(size=(400, 6)) * [1, 3, 0.5, 2, 1, 4]).astype(np.float32)
+    y = x @ rng.normal(size=6) + rng.normal(size=400)
+    w = np.array([1, 1, 1, 10, 10, 10.0])
+    coef, intercept = GramSums.of(x, y).solve([0.02], w)[0]
+    xd = x.astype(np.float64)
+    mean, std = xd.mean(axis=0), xd.std(axis=0)
+    scale = std * np.sqrt(w)
+    reference = Ridge(alpha=len(x) * 0.02).fit((xd - mean) / scale, y)
+    np.testing.assert_allclose(coef, reference.coef_ / scale, rtol=1e-6)
+    assert intercept == pytest.approx(reference.intercept_ - mean @ (reference.coef_ / scale))
+
+
+def _with_task(y_from, seed=0):
+    d = _data(seed=seed)
+    task = np.random.default_rng(seed + 100).normal(size=(len(d.ends), 3))
+    spikes = chunk_features(d, 5).astype(np.float64)
+    noise = 0.3 * np.random.default_rng(seed + 200).normal(size=len(d.ends))
+    y = (
+        task @ [1.0, -1.0, 0.5]
+        if y_from == "task"
+        else spikes @ np.random.default_rng(3).normal(size=spikes.shape[1])
+    ) + noise
+    return dataclasses.replace(d, y=y, task_features=task)
+
+
+def test_spikes_and_task_learns_from_whichever_block_carries_the_signal():
+    for source in ("task", "spikes"):
+        train, test = _split(_with_task(source), _with_task(source).y, 3000)
+        decoder = SpikesAndTaskRidge(5, CV, ratios=(0.01, 1.0, 100.0))
+        decoder.fit([train], seed=0)
+        assert r2_score(test.y, decoder.predict(test)) > 0.8
+        assert decoder.models["e"].task_penalty_ratio in (0.01, 1.0, 100.0)
+    # When only the task block carries signal, it is penalised no more than the spikes.
+    decoder = SpikesAndTaskRidge(5, CV, ratios=(0.01, 1.0, 100.0))
+    decoder.fit([_split(_with_task("task"), _with_task("task").y, 3000)[0]], seed=0)
+    assert decoder.models["e"].task_penalty_ratio <= 1.0
+
+
+def test_parallel_fit_matches_sequential():
+    sessions = [
+        dataclasses.replace(
+            _data(eid=e, seed=i), y=np.random.default_rng(i).normal(size=N_BINS - CONTEXT + 1)
+        )
+        for i, e in enumerate("abc")
+    ]
+    one, many = RidgeDecoder(5, CV), RidgeDecoder(5, CV, n_jobs=2)
+    one.fit(sessions, seed=0)
+    many.fit(sessions, seed=0)
+    for e in "abc":
+        np.testing.assert_array_equal(one.models[e].coef, many.models[e].coef)
+        assert one.models[e].lam == many.models[e].lam
+
+
+def test_spikes_and_task_logistic_runs():
+    d = _with_task("task")
+    y = (d.y > 0).astype(float)
+    train, test = _split(dataclasses.replace(d, y=y), y, 3000)
+    decoder = SpikesAndTaskLogistic(5, CV, ratios=(0.1, 10.0))
+    decoder.fit(
+        [
+            dataclasses.replace(
+                train, ends=train.ends[::5], y=train.y[::5], task_features=train.task_features[::5]
+            )
+        ],
+        seed=0,
+    )
+    p = decoder.predict(test)
+    assert roc_auc_score(test.y, p) > 0.9

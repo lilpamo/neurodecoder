@@ -20,3 +20,9 @@ null_trialstruct:
   max_time_s: 3.0
   # Trial-level targets: this many previous trials' stimulus side, choice and reward.
   history_trials: 10
+
+# null_pseudosession (block only; adopted after the first table, see docs/DECISIONS.md):
+# pseudo-session block sequences from IBL's own generator, decoded by the model under
+# test with the same pipeline; per-session median over the pseudo-sessions.
+null_pseudosession:
+  n_sessions: 100

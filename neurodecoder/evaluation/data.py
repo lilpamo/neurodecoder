@@ -16,6 +16,13 @@ Samples for one session and partition (contract.SessionData):
   window reaches outside the partition's span is dropped and counted in `dropped`.
 With a shift (null_shuffle), the target is rotated first (evaluation.nulls) and the
 same ends are sampled; a bin whose rotated target is undefined is dropped.
+
+leave_one_block_out splits (trial targets only; adopted after the first table): the
+provider has one fold per held-out block index (`folds()`); a fold serves the
+session's fold-k training and test trials, keeps a window only if it lies wholly in
+one of that partition's intervals (others dropped and counted), and normalises with a
+Normalizer fit on that fold's training intervals. For block, `pseudo=seed` replaces
+the labels with a pseudo-session from IBL's generator (null_pseudosession).
 """
 
 import math
@@ -32,6 +39,7 @@ from neurodecoder.evaluation.nulls import (
     NullConfig,
     bin_trialstruct_features,
     draw_shifts,
+    generate_pseudo_blocks,
     load_null_config,
     shift_bin_target,
     shift_trial_target,
@@ -47,7 +55,8 @@ from neurodecoder.preprocess.binning import (
 from neurodecoder.preprocess.normalize import fit_normalizer
 from neurodecoder.preprocess.windows import window_plan
 from neurodecoder.qc.units import apply_unit_qc
-from neurodecoder.splits.registry import Split
+from neurodecoder.splits.guards import assert_split_valid
+from neurodecoder.splits.registry import Split, bin_range
 from neurodecoder.targets import bins as bin_targets
 from neurodecoder.targets import trials as trial_targets
 from neurodecoder.targets.config import TargetConfig, load_target_config
@@ -103,7 +112,15 @@ class SplitData:
         self.targets = targets or load_target_config()
         self.nulls = nulls or load_null_config()
         self.context_bins = self._context(context_bins)
-        self.plan = window_plan(split, context_bins=self.context_bins, stride_bins=1)
+        self.lobo = split.kind == "leave_one_block_out"
+        if self.lobo and target in PER_BIN:
+            raise ValueError("leave_one_block_out splits are for trial targets only")
+        if self.lobo:
+            assert_split_valid(split, context_bins=self.context_bins)
+            self.plan = None
+        else:
+            self.plan = window_plan(split, context_bins=self.context_bins, stride_bins=1)
+        self.pseudo_sessions = target == "block"
         if target == "movement_state" and behaviour_root is None:
             behaviour_root = load_data_config().bwm_behavior_root
         self._behaviour_root = behaviour_root
@@ -117,10 +134,23 @@ class SplitData:
             self._prepared[eid] = _Prepared(
                 _Trials(eid, session.trials), units, binned, self._build_target(session, binned)
             )
-        self.normalizer = fit_normalizer(
-            split, {e: p.binned for e, p in self._prepared.items()}, self.preproc
-        )
+        binned = {e: p.binned for e, p in self._prepared.items()}
+        if self.lobo:
+            self.n_folds = max(len(split.sessions[e]["folds"]) for e in self._prepared)
+            # One Normalizer per fold, each fit on that fold's training intervals only.
+            self.normalizers = [
+                fit_normalizer(split, binned, self.preproc, fold=k) for k in range(self.n_folds)
+            ]
+            self.normalizer = None
+        else:
+            self.n_folds = 1
+            self.normalizer = fit_normalizer(split, binned, self.preproc)
+            self.normalizers = [self.normalizer]
         self.dropped: dict[tuple[str, str], int] = {}
+
+    def folds(self) -> list:
+        """One provider per fold: [self] unless the split is leave_one_block_out."""
+        return [_Fold(self, k) for k in range(self.n_folds)] if self.lobo else [self]
 
     def _context(self, context_bins: int | None) -> int:
         if self.target in PER_BIN:
@@ -139,18 +169,31 @@ class SplitData:
             return bin_targets.movement_state(session, binned, self._behaviour_root, self.targets)
         return getattr(trial_targets, self.target)(session, binned, self.targets)
 
-    def data(self, eid: str, partition: str, *, shift: int | None = None) -> SessionData:
+    def data(
+        self,
+        eid: str,
+        partition: str,
+        *,
+        shift: int | None = None,
+        pseudo: int | None = None,
+        fold: int | None = None,
+    ) -> SessionData:
         if eid not in self.split.partitions.get(partition, ()):
             raise ValueError(f"{eid} is not in {partition}")
+        if self.lobo and fold is None:
+            raise ValueError("a leave_one_block_out provider serves data through folds()")
         p = self._prepared[eid]
         if self.target in PER_BIN:
+            if pseudo is not None:
+                raise ValueError(f"{self.target} has no pseudo-sessions")
             ends, y, features = self._bin_samples(p, partition, shift)
         else:
-            ends, y, features = self._trial_samples(p, partition, shift)
+            ends, y, features = self._trial_samples(p, partition, shift, pseudo, fold)
+        normalizer = self.normalizers[fold] if self.lobo else self.normalizer
         return SessionData(
             eid=eid,
             partition=partition,
-            z=self.normalizer.transform(p.binned),
+            z=normalizer.transform(p.binned),
             first_bin=p.binned.first_bin,
             bin_ms=p.binned.bin_ms,
             units=p.units,
@@ -174,15 +217,46 @@ class SplitData:
         features, _ = bin_trialstruct_features(p.trials, b, self.nulls)
         return ends[keep], y[keep], features[rel[keep]]
 
-    def _trial_samples(self, p: _Prepared, partition: str, shift: int | None):
+    def _trial_target(self, p: _Prepared, shift: int | None, pseudo: int | None):
         target = p.target if shift is None else shift_trial_target(p.target, shift)
+        if pseudo is None:
+            return target
+        if self.target != "block":
+            raise ValueError(f"{self.target} has no pseudo-sessions")
+        prior = generate_pseudo_blocks(len(p.trials.trials), seed=pseudo)
         table = target.table
-        if self.split.kind == "within_session":
-            listed = self.split.sessions[p.trials.eid]["trials"][partition]
-            table = table[table["trial"].isin(listed)]
-        first, last = self.plan.span(p.binned, partition)
-        inside = (table["end_bin"] - self.context_bins + 1 >= first) & (table["end_bin"] <= last)
-        self.dropped[(p.trials.eid, partition)] = int((~inside).sum())
+        pseudo_prior = prior[table["trial"].to_numpy()]
+        keep = pseudo_prior != 0.5  # the generator's unbiased opening has no block label
+        table = table[keep].assign(label=(pseudo_prior[keep] == 0.8).astype(np.int64))
+        return replace(target, table=table.reset_index(drop=True), name=f"{target.name}:pseudo")
+
+    def _trial_samples(self, p, partition, shift, pseudo=None, fold=None):
+        target = self._trial_target(p, shift, pseudo)
+        table = target.table
+        eid = p.trials.eid
+        if self.lobo:
+            record = self.split.sessions[eid]["folds"][fold]
+            table = table[table["trial"].isin(record["trials"][partition])]
+            spans = (
+                record["blocks"]["train"] if partition == "train" else [record["blocks"]["test"]]
+            )
+            ranges = [bin_range(span, self.preproc.bin_ms) for span in spans]
+            start = table["end_bin"] - self.context_bins + 1
+            inside = np.zeros(len(table), dtype=bool)
+            for first, last in ranges:
+                inside |= ((start >= first) & (table["end_bin"] <= last)).to_numpy()
+            key = f"{partition}/fold{fold}"
+        else:
+            if self.split.kind == "within_session":
+                listed = self.split.sessions[eid]["trials"][partition]
+                table = table[table["trial"].isin(listed)]
+            first, last = self.plan.span(p.binned, partition)
+            inside = (
+                (table["end_bin"] - self.context_bins + 1 >= first) & (table["end_bin"] <= last)
+            ).to_numpy()
+            key = partition
+        if pseudo is None and shift is None:
+            self.dropped[(eid, key)] = int((~inside).sum())
         table = table[inside].reset_index(drop=True)
         features, _ = trial_trialstruct_features(p.trials, replace(target, table=table), self.nulls)
         ends = table["end_bin"].to_numpy(np.int64)
@@ -196,3 +270,20 @@ class SplitData:
             minimum = math.ceil(self.nulls.min_shift_s * 1000 / b.bin_ms)
             return draw_shifts(task.stop - task.start, minimum, n_shifts, seed=seed)
         return draw_shifts(len(p.target.table), self.nulls.min_shift_trials, n_shifts, seed=seed)
+
+
+class _Fold:
+    """One fold of a leave_one_block_out SplitData: the sessions that have fold k."""
+
+    def __init__(self, parent: SplitData, k: int):
+        self.parent, self.k = parent, k
+        eids = [e for e in parent._prepared if k < len(parent.split.sessions[e]["folds"])]
+        self.split = _FoldSplit({"train": eids, "test": eids})
+
+    def data(self, eid: str, partition: str, **labels) -> SessionData:
+        return self.parent.data(eid, partition, fold=self.k, **labels)
+
+
+@dataclass(frozen=True)
+class _FoldSplit:
+    partitions: dict

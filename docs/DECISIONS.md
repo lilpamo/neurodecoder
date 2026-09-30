@@ -6,6 +6,159 @@ first.
 
 ---
 
+### 2026-09-30 — Block split: adjacent pairs, scored per fold — made AFTER the confirmation set
+
+**Made after seeing the confirmation set's block table**
+(`runs/20260929T114437Z_phase3_confirmation/block`: `model` AUROC 0.000 in 9 of 10
+sessions, 0.019 in the tenth). That result exposed a defect in the split as first built
+(`docs/NEGATIVE_RESULTS.md`, 2026-09-30). The fix was accepted on a synthetic
+no-signal test, never on a real-data score. It changes block only: no null,
+threshold, target or split changed for any other target.
+
+**Decision** (the user chose pairs, then per-fold scoring after pairs alone failed
+the no-signal test):
+- **`leave_one_block_out` holds out adjacent pairs of biased blocks**
+  (`splits/registry.py`): one 0.2 and one 0.8 block per fold; with an odd count,
+  the last block joins the final pair. Every biased block is tested exactly once,
+  with the same 2 s gap either side. The split's params record
+  `blocks_per_fold: 2`, so its hash differs from the first version's.
+- **The guard rejects a fold whose test or training trials hold one label**
+  (`splits/guards.py`). Each session record now keeps every trial's
+  `probabilityLeft` (`trial_prior`), so the check reads the labels. A split
+  without it (the first version) is refused.
+- **The contract scores each fold separately** (`evaluation/contract.py`). A
+  session's metrics are the mean over its folds whose primary metric is defined.
+  A fold whose test labels hold one class has no AUROC, which can happen with
+  shifted or pseudo labels. `n_samples` and `n_folds` count the scored folds.
+  Providers with one fold (every other split) are scored exactly as before.
+- The per-fold normaliser and the other guard checks are unchanged.
+
+**Why per-fold scoring:** each fold's model has its own offset, set by its
+training class balance. Pooling lets those offsets rank samples across folds,
+which inverted decoders with no signal (single blocks: AUROC ~0) and still biased
+them with pairs (noise medians 0.34–0.41). Within a fold, every sample shares the
+offset.
+
+**Acceptance test:** `tests/test_lobo_no_signal.py`. Pure Poisson noise with
+IBL-generated block labels goes through the real split, provider, decoders and
+`evaluate`. `model`, `model_with_task`, `null_shuffle` and `null_pseudosession`
+must each score a median AUROC within 0.5 ± 0.07 over 6 sessions. They score
+0.489, 0.532, 0.519 and 0.499; `null_trialstruct` scores 0.491 and
+`baseline_rrr` 0.499.
+
+**Alternatives considered:**
+- Weighting both classes equally when fitting. It changes every block decoder
+  and was not tested.
+- Dropping the split and returning block to within-session with the
+  pseudo-session null.
+
+**Consequences:**
+- The block rows of both runs on the first version are invalid.
+- Block is re-run on the confirmation set only
+  (`runs/20260930T082034Z_phase3_confirmation_block_pairs`). The first table is
+  already seen, and choice and wheel velocity already fail the gate there, so
+  block can't change its outcome.
+- A per-session table from a fold split gains an `n_folds` column.
+- The no-signal test adds about 3 minutes to the suite.
+
+### 2026-09-29 — Phase 3 gate: the incremental row, leave-one-block-out and pseudo-sessions for block — adopted AFTER the first table
+
+**Made after seeing the first table** (`runs/20260929T070943Z_phase3_first_table`,
+gate not passed, `docs/NEGATIVE_RESULTS.md`). Proposed in
+`docs/proposals/phase3_gate_methods.md`; the user adopted (a), B1 and B2 and
+rejected a blocked scheme for per-bin targets. Changing the evaluation after a
+result is itself a degree of freedom (split doc, route 4), so:
+- **no row, null, threshold, target or existing split was changed or removed**;
+  every change below adds something;
+- **the gate call rests on the confirmation set**
+  (`configs/runs/phase3_confirmation.yaml`: 10 sessions drawn with seed 1 from
+  the manifest minus the first table's 10, before any of this was built). The
+  first table's sessions are "seen" and are re-run for comparison only.
+
+**(a) `model_with_task`, and the gate moves to it.**
+- A new row: the model under test given its spike features **and** the
+  `null_trialstruct` features, on the same split, test samples and gapped
+  training CV (`SpikesAndTaskRidge` / `SpikesAndTaskLogistic`).
+- **Two penalties.** The task block's per-feature penalty is `ratio × λ`,
+  implemented by scaling the standardised task columns by 1/√ratio. The ratio
+  (10^-2 … 10^2, 5 values, `configs/baselines.yaml: with_task`) is chosen with
+  λ by the same training CV. Without it, one shared λ over ~100–400 spike
+  features and ~30 task features would make "adding spikes" look harmful for
+  fitting reasons.
+- **Both verdicts are printed**: `model vs null_trialstruct` (spikes alone vs
+  task, unchanged) and `model_with_task vs null_trialstruct` (does neural
+  activity add information beyond the task?).
+- **`GATE = (model_with_task, null_trialstruct)`** for every target, because
+  that is the question CLAUDE.md §5 and split-doc route 1 ask. Each report ends
+  with `GATE (...): PASSED / NOT PASSED`. Passing the spikes-alone verdict stays
+  the stronger, separately reported claim.
+
+**B1. Leave-one-block-out, block only** (`splits/registry.py`:
+`leave_one_block_out`; escalated per CLAUDE.md §10 and approved).
+- Blocks are runs of `probabilityLeft ∈ {0.2, 0.8}` among the session's trials;
+  the 90-trial unbiased start is in no block.
+- Each biased block is one fold's test set, from its first trial's start to its
+  last trial's end. Training is every earlier trial that ends at least `gap_s`
+  (2 s, as in the within-session split) of empty bins before the test block,
+  and every later trial that starts that far after it. Trials in the gaps are
+  in neither partition for that fold. The guard also requires the gap to be at
+  least the context window, and sample windows must lie inside their
+  partition's intervals.
+- Sessions need ≥ 4 biased blocks (`MIN_LOBO_BLOCKS`), otherwise the builder
+  raises.
+- The guard (`_check_session_folds`) checks per fold: no training interval
+  shares a bin with the test block, the gap holds, no trial is in both, and no
+  trial is tested twice.
+- The normaliser is fit per fold on that fold's training data only (R3),
+  hashed as `<split hash>#fold<k>`, and every fold's normaliser is saved
+  (`normalizers.json`).
+- ~~Per-session metrics pool every fold's test predictions, so each block is
+  scored once and every session has both classes.~~ **Superseded 2026-09-30:**
+  single-block folds with pooled scoring inverted decoders with no signal. The
+  split now holds out adjacent pairs, and each fold is scored on its own (entry
+  "Block split: adjacent pairs, scored per fold").
+- Refused for per-bin targets. Choice, wheel velocity and movement state stay
+  on the within-session split.
+- The split is its own kind with its own hash (`split_leave_one_block_out.json`,
+  recorded in the manifest); the within-session split file is unchanged.
+
+**B2. `null_pseudosession`, block only** (`evaluation/nulls.py`,
+`configs/nulls.yaml: null_pseudosession`).
+- 100 pseudo block sequences per session from a seeded port of brainbox's
+  `generate_pseudo_blocks`: 90 unbiased trials, then alternating blocks, first
+  side at random, lengths exponential(60) truncated to (20, 100). Seeds are
+  derived from the run seed and the eid.
+- The model is refit and scored on each, with the same pipeline, split and
+  neural data. The row is the per-session median, with its own
+  `model vs null_pseudosession` verdict. It sits beside `null_shuffle`, which is
+  unchanged.
+- Needs at least `MIN_PSEUDO` = 20 pseudo-sessions.
+- **Checked against the release:** block lengths from the port match the BWM
+  sessions' (KS p = 0.107). The test compares **distinct** sequences only: BWM
+  ephys sessions reuse pre-generated block sequences (18 distinct openings, 118
+  distinct full sequences), so the sessions' block lengths are not independent
+  draws, and a naive KS test rejects (p = 0.0001) for that reason alone.
+
+**Also:** the per-session baselines fit sessions in parallel
+(`configs/baselines.yaml: n_jobs: 6`) through `joblib`, which scikit-learn
+already installs and depends on; results are identical to sequential fitting
+(tested). Block LOBO with pseudo-sessions needs thousands of logistic fits per
+session.
+
+**Alternatives considered:**
+- Replacing or weakening `null_trialstruct`: ruled out.
+- B1 or B2 alone: B2 on the old split still scores on 1–4 test blocks, and B1
+  without B2 leaves slow drift to the circular shift.
+- A blocked within-session scheme for per-bin targets: not adopted.
+
+**Consequences:**
+- Reports now have up to eight rows: `null_pseudosession` for block,
+  `model_with_task` for every target.
+- `metrics.json` gains `gate`, `n_folds`, `n_pseudo` and `normalizer_hashes`
+  (a list, replacing `normalizer_hash`); the manifest gains
+  `split_leave_one_block_out_hash` and each target's split hash.
+- Both run configs gain `split.leave_one_block_out: [block]`.
+
 ### 2026-09-29 — Local app for non-programmers (Phase 8b)
 
 **Decision:** build a **local app**: a browser UI that runs on the user's own

@@ -36,12 +36,17 @@ class BaselineConfig:
     per_bin_chunks: int
     trial_chunks: int
     cv: CVConfig
+    task_penalty_ratios: tuple[float, ...] = (1.0,)
+    n_jobs: int = 1
 
 
 def load_baseline_config(path: str | os.PathLike = DEFAULT_CONFIG) -> BaselineConfig:
     raw = yaml.safe_load(Path(path).read_text()) or {}
-    if set(raw) != {"per_bin", "trial", "cv"}:
-        raise ValueError(f"{path}: keys {sorted(raw)}, expected per_bin, trial, cv")
+    expected = {"per_bin", "trial", "cv", "with_task", "n_jobs"}
+    if set(raw) != expected:
+        raise ValueError(f"{path}: keys {sorted(raw)}, expected {sorted(expected)}")
+    w = raw["with_task"]
+    ratios = np.logspace(w["log10_ratio_min"], w["log10_ratio_max"], w["n_ratios"])
     cv = raw["cv"]
     lambdas = np.logspace(cv["log10_lambda_min"], cv["log10_lambda_max"], cv["n_lambdas"])
     return BaselineConfig(
@@ -49,6 +54,8 @@ def load_baseline_config(path: str | os.PathLike = DEFAULT_CONFIG) -> BaselineCo
         per_bin_chunks=raw["per_bin"]["n_chunks"],
         trial_chunks=raw["trial"]["n_chunks"],
         cv=CVConfig(n_folds=cv["n_folds"], lambdas=tuple(float(v) for v in lambdas)),
+        task_penalty_ratios=tuple(float(r) for r in ratios),
+        n_jobs=int(raw["n_jobs"]),
     )
 
 

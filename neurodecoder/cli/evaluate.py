@@ -11,7 +11,9 @@ Writes manifest.json first (status "running", updated after each target):
 
 Also split.json. Per target, <target>/ holds:
 - report.txt: the six-row table and verdicts;
-- normalizer.json: the Normalizer fit on the split's training data, with its hash (R3);
+- normalizer.json (normalizers.json, one per fold, for a leave_one_block_out split):
+  the Normalizer fit on the split's training data, with its hash (R3);
+- pseudo.parquet: per-session scores per pseudo-session, when the target has them;
 - metrics.json: every per-session metric, the summary, the verdicts and any dropped
   trials; the numbers any later report must trace back to;
 - per_session.parquet and shuffle.parquet.
@@ -38,15 +40,18 @@ from neurodecoder.data.manifest import Manifest, build_manifest
 from neurodecoder.evaluation.contract import ContractResult, evaluate
 from neurodecoder.evaluation.data import KINDS, PER_BIN, SplitData
 from neurodecoder.models.baselines.features import BaselineConfig, load_baseline_config
+from neurodecoder.evaluation.nulls import load_null_config
 from neurodecoder.models.baselines.linear import (
     LogisticDecoder,
     RidgeDecoder,
+    SpikesAndTaskLogistic,
+    SpikesAndTaskRidge,
     TrialStructureLogistic,
     TrialStructureRidge,
 )
 from neurodecoder.models.baselines.rrr import RRRClassification, RRRRegression
 from neurodecoder.preprocess.binning import PREPROC_VERSION, load_preproc_config
-from neurodecoder.splits.registry import save_split, within_session
+from neurodecoder.splits.registry import leave_one_block_out, save_split, within_session
 from neurodecoder.targets.config import load_target_config
 
 REPO = Path(__file__).resolve().parents[2]
@@ -66,6 +71,8 @@ class RunConfig:
     train_stride: dict
     model: str
     n_shifts: int
+    # Targets evaluated on a leave_one_block_out split instead of the within-session one.
+    leave_one_block_out: tuple[str, ...] = ()
 
 
 def load_run_config(path) -> RunConfig:
@@ -78,6 +85,12 @@ def load_run_config(path) -> RunConfig:
         raise ValueError(f"{path}: unknown targets {unknown}")
     if raw["model"] not in MODELS:
         raise ValueError(f"{path}: model must be one of {MODELS}")
+    split_keys = set(raw["split"]) - {"train_fraction", "gap_s", "leave_one_block_out"}
+    if split_keys:
+        raise ValueError(f"{path}: unknown split keys {sorted(split_keys)}")
+    lobo = tuple(raw["split"].get("leave_one_block_out", []))
+    if set(lobo) - {"choice", "block"}:
+        raise ValueError(f"{path}: leave_one_block_out is for trial targets (choice, block)")
     return RunConfig(
         name=raw["name"],
         seed=int(raw["seed"]),
@@ -89,6 +102,7 @@ def load_run_config(path) -> RunConfig:
         train_stride=dict(raw["train_stride"]),
         model=raw["model"],
         n_shifts=int(raw["n_shifts"]),
+        leave_one_block_out=lobo,
     )
 
 
@@ -104,22 +118,26 @@ def select_sessions(manifest: Manifest, fixed, n_random: int, *, seed: int) -> l
 
 
 def decoders(target: str, provider: SplitData, cfg: BaselineConfig) -> dict:
-    """The row factories for one target: model and baseline_ridge are the same baseline."""
+    """The row factories for one target: model and baseline_ridge are the same baseline;
+    model_with_task is that baseline given the task features too."""
+    jobs, ratios = cfg.n_jobs, cfg.task_penalty_ratios
     if target == "wheel_velocity":
         chunks = cfg.per_bin_chunks
         return dict(
-            model=lambda: RidgeDecoder(chunks, cfg.cv),
-            baseline_ridge=lambda: RidgeDecoder(chunks, cfg.cv),
+            model=lambda: RidgeDecoder(chunks, cfg.cv, n_jobs=jobs),
+            model_with_task=lambda: SpikesAndTaskRidge(chunks, cfg.cv, ratios, n_jobs=jobs),
+            baseline_ridge=lambda: RidgeDecoder(chunks, cfg.cv, n_jobs=jobs),
             baseline_rrr=lambda: RRRRegression(chunks, cfg.cv),
-            trialstruct=lambda: TrialStructureRidge(cfg.cv),
+            trialstruct=lambda: TrialStructureRidge(cfg.cv, n_jobs=jobs),
         )
     chunks = cfg.per_bin_chunks if target in PER_BIN else cfg.trial_chunks
     rrr_chunks = cfg.per_bin_chunks if target in PER_BIN else provider.context_bins
     return dict(
-        model=lambda: LogisticDecoder(chunks, cfg.cv),
-        baseline_ridge=lambda: LogisticDecoder(chunks, cfg.cv),
+        model=lambda: LogisticDecoder(chunks, cfg.cv, n_jobs=jobs),
+        model_with_task=lambda: SpikesAndTaskLogistic(chunks, cfg.cv, ratios, n_jobs=jobs),
+        baseline_ridge=lambda: LogisticDecoder(chunks, cfg.cv, n_jobs=jobs),
         baseline_rrr=lambda: RRRClassification(rrr_chunks, cfg.cv),
-        trialstruct=lambda: TrialStructureLogistic(cfg.cv),
+        trialstruct=lambda: TrialStructureLogistic(cfg.cv, n_jobs=jobs),
     )
 
 
@@ -155,13 +173,20 @@ def _jsonable(value):
 
 def _write_target(out: Path, target: str, result: ContractResult, provider: SplitData, note: str):
     out.mkdir(parents=True, exist_ok=True)
-    # R3: the normalisation statistics, fit on training data only, travel with the run.
-    normalizer = provider.normalizer.to_dict()
-    (out / "normalizer.json").write_text(json.dumps(_jsonable(normalizer), allow_nan=False))
+    # R3: the normalisation statistics, fit on training data only, travel with the run
+    # (one per fold for a leave_one_block_out split).
+    if not provider.lobo:
+        normalizer = provider.normalizers[0].to_dict()
+        (out / "normalizer.json").write_text(json.dumps(_jsonable(normalizer), allow_nan=False))
+    else:
+        normalizers = [n.to_dict() for n in provider.normalizers]
+        (out / "normalizers.json").write_text(json.dumps(_jsonable(normalizers), allow_nan=False))
     (out / "report.txt").write_text(f"{target}\n{note}\n{result.report()}\n")
     per_session = pd.concat(result.per_session, names=["row", "eid"])
     per_session.to_parquet(out / "per_session.parquet")
     result.shuffle.rename(columns=str).to_parquet(out / "shuffle.parquet")
+    if result.pseudo is not None:
+        result.pseudo.rename(columns=str).to_parquet(out / "pseudo.parquet")
     metrics = {
         "target": target,
         "kind": result.kind,
@@ -173,8 +198,11 @@ def _write_target(out: Path, target: str, result: ContractResult, provider: Spli
         "rows": {row: table.to_dict(orient="index") for row, table in result.per_session.items()},
         "summary": result.summary().to_dict(orient="index"),
         "verdicts": [vars(v) for v in result.verdicts],
+        "gate": vars(result.gate),
+        "n_folds": result.n_folds,
+        "n_pseudo": result.n_pseudo,
         "dropped": {f"{e}/{p}": n for (e, p), n in provider.dropped.items()},
-        "normalizer_hash": provider.normalizer.hash,
+        "normalizer_hashes": [n.hash for n in provider.normalizers],
     }
     (out / "metrics.json").write_text(json.dumps(_jsonable(metrics), indent=1, allow_nan=False))
 
@@ -207,6 +235,10 @@ def run(
         manifest, trials, preproc, train_fraction=config.train_fraction, gap_s=config.gap_s
     )
     save_split(split, out / "split.json")
+    lobo_split = None
+    if config.leave_one_block_out:
+        lobo_split = leave_one_block_out(manifest, trials, preproc, gap_s=config.gap_s)
+        save_split(lobo_split, out / "split_leave_one_block_out.json")
 
     config_files = {"run": Path(config_path)}
     config_files |= {name: REPO / "configs" / f"{name}.yaml" for name in CONFIG_FILES}
@@ -229,6 +261,7 @@ def run(
         "preproc_fingerprint": preproc.fingerprint(),
         "targets_fingerprint": targets_cfg.fingerprint(),
         "split_hash": split.hash,
+        "split_leave_one_block_out_hash": None if lobo_split is None else lobo_split.hash,
         "manifest_provenance": manifest.provenance,
         "sessions": eids,
         "versions": {
@@ -246,10 +279,11 @@ def run(
         "model and baseline_ridge are the same decoder in this run (model: ridge), "
         "so the baseline_ridge verdict is vacuous."
     )
+    nulls = load_null_config()
     for target in config.targets:
         start = time.time()
         provider = SplitData(
-            split,
+            lobo_split if target in config.leave_one_block_out else split,
             target,
             context_bins=baselines.per_bin_context_bins if target in PER_BIN else None,
             train_stride=config.train_stride.get(target, 1) if target in PER_BIN else 1,
@@ -260,12 +294,15 @@ def run(
             ceiling=None,
             seed=config.seed,
             n_shifts=config.n_shifts,
+            n_pseudo=nulls.n_pseudo_sessions if provider.pseudo_sessions else None,
             **decoders(target, provider, baselines),
         )
         _write_target(out / target, target, result, provider, note)
         run_manifest["targets"][target] = {
             "seconds": round(time.time() - start, 1),
-            "normalizer_hash": provider.normalizer.hash,
+            "split_hash": result.split_hash,
+            "gate_passed": result.gate.beats,
+            "normalizer_hashes": [n.hash for n in provider.normalizers],
         }
         save_manifest()
         print(f"{target}: done in {time.time() - start:.0f} s", flush=True)

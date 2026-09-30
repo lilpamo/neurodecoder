@@ -7,6 +7,7 @@ Calibration and test data are never read.
 
 The mode follows from the split kind:
 - within_session -> "per_unit": each unit's mean and std over its train block.
+- leave_one_block_out -> "per_unit" per fold: over that fold's training intervals.
 - any other kind -> "pooled": one mean and std over every unit and bin of the train
   partition, applied to every unit. Test units in those splits never appear in
   training; normalising train units per unit but test units pooled would itself shift
@@ -137,13 +138,36 @@ def _train_block(split: Split, binned: BinnedSpikes) -> np.ndarray:
     return binned.counts[:, start:stop]
 
 
+def _fold_train_counts(split: Split, binned: BinnedSpikes, fold: int) -> np.ndarray:
+    """(n_units, n_train_bins): a leave_one_block_out fold's training intervals, joined."""
+    parts = []
+    for block in split.sessions[binned.eid]["folds"][fold]["blocks"]["train"]:
+        first, last = bin_range(block, split.preproc["bin_ms"])
+        start, stop = first - binned.first_bin, last - binned.first_bin + 1
+        if start < 0 or stop > binned.n_bins:
+            raise ValueError(
+                f"{binned.eid}: training bins {first}..{last} are outside the binned data"
+            )
+        parts.append(binned.counts[:, start:stop])
+    return np.concatenate(parts, axis=1)
+
+
 def fit_normalizer(
-    split: Split, binned: Mapping[str, BinnedSpikes], preproc: PreprocConfig
+    split: Split,
+    binned: Mapping[str, BinnedSpikes],
+    preproc: PreprocConfig,
+    *,
+    fold: int | None = None,
 ) -> Normalizer:
     """Fit on the split's training data. binned may hold any sessions; only train is read.
 
     binned: eid -> preprocess_session output with the split's preprocessing fingerprint.
+    fold: required for leave_one_block_out (and only there): per-unit statistics over
+    that fold's training intervals, for every session that has the fold. The
+    Normalizer's split_hash is then "<split hash>#fold<k>".
     """
+    if (fold is None) != (split.kind != "leave_one_block_out"):
+        raise ValueError("fold is required for leave_one_block_out splits and only for them")
     fingerprint = preproc.fingerprint()
     if split.preproc["fingerprint"] != fingerprint:
         raise ValueError(
@@ -158,6 +182,20 @@ def fit_normalizer(
         if binned[eid].eid != eid or binned[eid].fingerprint != fingerprint:
             raise ValueError(f"{eid}: binned data is not this session under this fingerprint")
     min_std = math.sqrt(preproc.qc.min_firing_rate_hz * preproc.bin_ms / 1000)
+
+    if split.kind == "leave_one_block_out":
+        units = {}
+        for eid in train:
+            if fold >= len(split.sessions[eid]["folds"]):
+                continue
+            counts = _fold_train_counts(split, binned[eid], fold)
+            mean, std = _mean_std(*_sums(counts), counts.shape[1], min_std)
+            units[eid] = {
+                "unit_ids": list(binned[eid].unit_ids),
+                "mean": mean.tolist(),
+                "std": std.tolist(),
+            }
+        return Normalizer("per_unit", f"{split.hash}#fold{fold}", fingerprint, min_std, None, units)
 
     if split.kind == "within_session":
         units = {}
