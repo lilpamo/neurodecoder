@@ -1,44 +1,106 @@
-# Neurodecoder Studio: the next three steps
+# Neurodecoder Studio: next steps
 
 Proposal, 2026-09-30. Follows the prototype on `studio-prototype`
 (`docs/DECISIONS.md`, "Direction change: Neurodecoder Studio"). Each step keeps
-the prototype's rule: the UI calls `neurodecoder/analysis/` (or `data/`) only.
+the prototype's rule: the UI computes nothing itself. It loads through `data/`
+and `qc/`, gets every number from `neurodecoder/analysis/` and draws through
+`viz/`.
 
-## 1. Import Kilosort / Phy folders (`data/backends/phy.py`), about 1–2 sessions
+## 1. Import Kilosort / Phy folders — done (2026-09-30)
 
-**What:** a fourth backend that returns the same `Session` as `bwm`, `nwb` and
-`one`, so everything downstream works unchanged.
-- **Read:** `spike_times.npy` (samples), `spike_clusters.npy`, `params.py`
-  (`sample_rate`), `channel_positions.npy`, and the cluster table.
-- **Cluster table:** `cluster_info.tsv` if Phy saved one, else
-  `cluster_group.tsv` and `cluster_KSLabel.tsv`.
-- **Dependencies:** none; NumPy and pandas are enough.
-- **Depth:** the amplitude-weighted channel y position.
-- **Labels:** Phy's `good`/`mua`/`noise` are kept as a new `curation` column.
-  They are never mapped onto IBL's numeric `label`.
+Built as planned, with these differences (`docs/DECISIONS.md`, "Phy import and
+Phy QC"):
+- **Code:** `data/backends/phy.py` (`load_session_phy`), `qc/phy.py` and
+  `configs/qc_phy.yaml`. The group is Phy's `good`/`mua`/`noise` label, kept as
+  `phy_group`, with `group_file` recording where it came from.
+- **Group:** read from `cluster_group.tsv`, else `cluster_KSLabel.tsv`, else
+  missing. `cluster_info.tsv` is not read.
+- **Depth:** the y position of the peak channel of the cluster's most-used
+  template, not an amplitude-weighted position. It is declared missing without
+  the template files.
+- **Events CSV:** canonical trial column names, and it must include
+  `intervals_0` and `intervals_1`. Events outside the span of the recorded
+  spikes are refused.
+- **Phy QC:** group in `[good]` and a task-period rate of at least 0.1 Hz.
+- **Opening data:** through server flags (`--phy FOLDER --events CSV`). The
+  folder-picker question is still open.
 
-**Events:** a CSV of event times, one column per event, one row per trial. The
-first version **requires the times to already be on the probe's clock, in
-seconds**. Otherwise it refuses, and the refusal says so. Sync (NIDQ or
-SpikeGLX pulse alignment) is a separate step.
+## 2. Atlas and 3D view, about 3–4 sessions
 
-**Missing means missing:**
-- A Phy folder has no brain region, so `units.acronym` is declared missing and the
-  region filter is disabled with a reason.
-- Unit QC today needs a label and a location. For Phy data the options are:
-  - a Phy-specific QC config (curation == good + task rate);
-  - failing every unit. **Needs your decision.**
+**What:** where each unit is, at the region level the user picks, in a 3D brain
+and along the probe. Plus a visual redesign of the app.
+
+**Region level** (`analysis/atlas.py`):
+- A selector for Allen, Beryl or Cosmos. **Default: Beryl.**
+- Names, colours and hierarchy come from `iblatlas.regions.BrainRegions`, already
+  a dependency: `acronym2acronym(..., mapping=...)`, `rgb`, and parents and
+  descendants.
+- Remapping is shown, never hidden. At Beryl and Cosmos, fibre tracts and some
+  nuclei map to `root` (in d23a44ef, `ml` becomes `root`). Those units are
+  labelled "no Beryl region" and counted, not dropped.
+- Unit QC keeps using the Allen acronym, so QC doesn't change with the display
+  level (R6).
+
+**Hierarchical region filter:**
+- A tree built from the iblatlas hierarchy, trimmed to the regions this session
+  has units in, with unit counts per node.
+- Selecting a node includes its descendants. The heatmap title names the node
+  and its count.
+
+**3D brain** (`studio/static/`, three.js):
+- The whole-brain outline plus the meshes of the regions present, in their Allen
+  colours.
+- Each probe track, fitted to its channel or unit positions.
+- The selected unit's site as a marker. Clicking a site selects that unit.
+- **Coordinates:** IBL `x, y, z` (metres, from bregma) are converted to CCF µm
+  in `analysis/atlas.py` with iblatlas's own landmarks, not with constants
+  copied into the code. The page receives CCF coordinates and computes none.
+- **Meshes:** the Allen CCF 2017 structure meshes (`.obj`, one per structure id)
+  from the Allen Institute's download server. They are downloaded once, on
+  first use, into `data_root/atlas/ccf_2017_meshes/`, never into the repo, and
+  their sizes are listed before downloading.
+- **three.js:** kept in the repo as a local file, with no CDN, so the app works
+  offline. It is loaded as an ES module with no build step.
+
+**2D probe strip:**
+- The probe's channel map (`lateral_um`, `axial_um`, or `channel_positions.npy`
+  for Phy), with each unit at its site, coloured by region at the chosen level.
+- Region boundaries are marked along the shank. The selected unit is
+  highlighted, and clicking a unit selects it.
+
+**Phy data:** a Phy folder has no brain position, so the 3D view and region
+filter are disabled with that reason. The probe strip still works from
+`channel_positions.npy`. Importing channel locations (e.g. IBL's alignment
+output) is a later step.
+
+**Visual redesign:**
+- **Colours:** one set of colour tokens, in light and dark, and region colours
+  from Allen.
+- **Layout:** a left rail (data source, QC toggle, level selector, region tree),
+  the unit table, the plots, and a 3D/probe panel.
+- **Plots:** restyled to match the rest of the app.
+- **Readability:** trial counts and exclusions always visible.
+
+**Chart library, a decision at the start of this step:** the PNG plots can't do
+hover or zoom.
+- **Recommended:** keep matplotlib, and make heatmap rows clickable through a
+  row→unit map, with no chart library.
+- **If hover and zoom on rasters are wanted:** uPlot, which is small, canvas
+  based and MIT licensed. It's preferred over ECharts, which is large, and
+  Plotly, which is excluded by CLAUDE.md §8.
+- Whichever is chosen gets its own DECISIONS.md entry, like three.js.
 
 **Tests first:**
-- A tiny Phy folder written in the test from known arrays, checked against a
-  hand-computed spike train per cluster.
-- A refusal test for events off the recording's clock.
-- Samples-to-seconds checked at 30 kHz.
+- **Remapping:** Allen → Beryl → Cosmos checked against hand-picked acronyms
+  (`CA1`→`CA1`→`HPF`, `DG-mo`→`DG`→`HPF`, `ml`→`root`).
+- **Tree:** unit counts per node sum correctly over descendants.
+- **Coordinates:** for d23a44ef, each unit's CCF position lies inside its
+  region's voxels in the Allen annotation volume, for all units but a
+  documented, small number. This needs iblatlas's annotation volume, a one-time
+  download.
+- **Track fit:** a straight probe gives a track through its sites.
 
-**Open question:** does "import" mean a folder picker in the UI? That needs a
-local file dialog: a path text box, or a native dialog via the OS.
-
-## 2. Responsiveness against a shuffle null (`analysis/responsiveness.py`), about 1–2 sessions
+## 3. Responsiveness against a shuffle null (`analysis/responsiveness.py`), about 1–2 sessions
 
 **What:** per unit and event, a p-value for "the rate in a response window
 differs from the rate in a baseline window".
@@ -69,12 +131,17 @@ even trials. This fixes the prototype's known circularity.
 **UI:** a "responsive" column in the unit table, with p and q values. The
 population heatmap gains a "responsive only" filter.
 
-## 3. Project file and figure export (`studio/project.py`), about 1 session
+**Phy QC:** consider adding a refractory-period metric computed from spike
+times. Kilosort's `good` passes 200 units on d23a44ef probe00, where IBL's label
+passes 114 (see step 1's DECISIONS entry).
+
+## 4. Project file and figure export (`studio/project.py`), about 1 session
 
 **Project file:** `*.ndstudio.json`, a plain JSON file that holds:
 - the data source (backend and eid, or Phy path), with a hash of the spike files;
 - the QC config hash;
-- the selected units and filters;
+- the selected units and filters, including the region level and tree
+  selection;
 - each analysis's parameters: event, window, bin, baseline, seed.
 
 It holds no results. Reopening it recomputes everything, so a project can never
@@ -98,7 +165,6 @@ names the file.
 ## Not in these steps
 
 - Tuning curves (contrast, choice).
-- Sync or alignment tools.
+- Sync or alignment tools, and importing channel locations for Phy data.
 - Multiple sessions per project.
 - The installer (Phase 8b).
-- An interactive zoom library.

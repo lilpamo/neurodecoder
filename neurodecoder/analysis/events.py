@@ -31,3 +31,12 @@ def event_times(trials: pd.DataFrame, event: str) -> np.ndarray:
         times = times[trials["feedbackType"].to_numpy(np.float64) == outcome]
     assert times.ndim == 1
     return times
+
+
+def available_events(trials: pd.DataFrame) -> dict[str, str]:
+    """event name -> label, for the events this trials table has the columns for."""
+    return {
+        name: label
+        for name, (label, column, outcome) in EVENTS.items()
+        if column in trials and (outcome is None or "feedbackType" in trials)
+    }

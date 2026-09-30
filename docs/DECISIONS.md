@@ -6,6 +6,88 @@ first.
 
 ---
 
+### 2026-09-30 — Studio step added: Atlas and 3D view; three.js for the 3D brain
+
+**Decision (the user's):** a new step 2 in `docs/proposals/studio_next_steps.md`,
+after the Phy import. It adds:
+- a region level selector (Allen, Beryl, Cosmos; **default Beryl**), with Allen
+  names and colours from iblatlas;
+- a hierarchical region filter;
+- a 3D brain from the Allen CCF meshes, cached locally, showing each probe track
+  and the selected unit's site;
+- a 2D probe strip;
+- a visual redesign.
+
+Responsiveness and the project file move to steps 3 and 4.
+
+**three.js** will draw the 3D brain. It has no Python-side equivalent that fits
+a browser UI. It is MIT licensed, and it runs as an ES module with no build
+step, so §8's "plain page, no build step" holds. It will be kept in the repo as a
+local file rather than loaded from a CDN, because Studio is a local app that must
+work offline. It is not installed yet; this entry is updated with the version
+when it is.
+
+**Chart library:** none yet. It is decided at the start of the step and recorded
+here then; the step's plan gives the options.
+
+**Consequences:**
+- The Allen CCF 2017 structure meshes are a new external data source. They are
+  downloaded once into `data_root/atlas/`, never into the repo.
+- iblatlas's annotation volume is needed for the coordinate test.
+- Unit QC keeps reading the Allen acronym, whatever level is displayed.
+
+### 2026-09-30 — Phy import and Phy QC (`data/backends/phy.py`, `qc/phy.py`, `configs/qc_phy.yaml`)
+
+**Decision:** Studio reads a Kilosort/Phy output folder (one probe) plus a CSV of
+trial events into the same `Session` as the other backends. It adds a Phy-specific
+unit QC (the user's choice over failing every unit):
+- the group must be in `[good]`;
+- the task-period rate must be at least 0.1 Hz, with the same task-period
+  definition and threshold as `configs/qc.yaml`.
+
+**How it reads a folder:**
+- `params.py` is parsed with `ast`, never executed. Phy itself executes it.
+- `spike_times.npy` must hold integer samples.
+- **Group:** from `cluster_group.tsv`, else `cluster_KSLabel.tsv`, else missing.
+  `group_file` records which file. Kilosort writes `cluster_group.tsv` as a copy
+  of its own labels, so a group is not proof of manual curation.
+- **Depth:** the peak channel of the cluster's most-used template. The plan said
+  amplitude-weighted. Peak channel needs no amplitude threshold, and Phy splits
+  and merges don't break it.
+- **Events:** the CSV uses canonical trial names and needs `intervals_0` and
+  `intervals_1`. Events outside the span of the recorded spikes are refused as
+  being on the wrong clock. A smaller clock offset can't be detected; that needs
+  sync, a later step.
+- **Missing fields:** region, IBL label, 3-D position and whole-recording rate
+  are declared missing.
+- **No cache:** a folder loads in seconds.
+
+**Real-data check:** IBL's own Kilosort output for d23a44ef probe00 (ONE,
+revision 2024-05-06), rewritten into Phy's format. It is not a folder Kilosort
+or Phy wrote.
+- `tests/test_phy.py`: all 674 clusters, identical spike counts, times within
+  half a sample, and Kilosort's 206 good.
+- PSTHs match the BWM backend's for the 114 shared units within bin-edge
+  rounding: at most 2 spikes in one bin.
+- A copy for trying Studio is in `data_root/derived/phy_export_d23a44ef/`, with
+  a README stating its provenance.
+
+**Finding:**
+- Kilosort's `good` is much looser than IBL's QC label. On probe00, Phy QC passes
+  200 units and IBL's `label == 1` (the BWM release) 114.
+- 103 pass both, 97 pass only Phy QC, and 11 pass only IBL's QC.
+- Phy QC is therefore not equivalent to the BWM units. A refractory-period
+  metric from spike times is proposed for step 3.
+
+**No new dependency. No `PREPROC_VERSION` bump:** a new config for a new data
+source changes no existing output.
+
+**Alternatives considered:**
+- `spikeinterface`'s Phy reader: a large dependency for a few `.npy` files, and
+  it executes `params.py`.
+- Mapping Phy groups onto IBL's numeric label: rejected, because they measure
+  different things.
+
 ### 2026-09-30 — Direction change: Neurodecoder Studio, a post-sorting analysis app
 
 **Decision (the user's):** Neurodecoder becomes **Neurodecoder Studio**, a local

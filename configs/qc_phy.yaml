@@ -1,0 +1,8 @@
+# Unit QC for Phy/Kilosort folders (docs/DECISIONS.md, 2026-09-30).
+# Phy data has no IBL QC label or brain region, so configs/qc.yaml can't apply.
+
+# Phy/Kilosort groups that pass. Kilosort's own labels are good/mua; Phy adds noise
+# and unsorted. The group comes from cluster_group.tsv, else cluster_KSLabel.tsv.
+groups: [good]
+# Same threshold and task-period definition as configs/qc.yaml.
+min_firing_rate_hz: 0.1

@@ -13,8 +13,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
+import pandas as pd
 
-from neurodecoder.analysis.events import EVENTS, event_times
+from neurodecoder.analysis.events import EVENTS, available_events, event_times
 from neurodecoder.analysis.psth import (
     bin_edges,
     peak_order,
@@ -25,7 +26,9 @@ from neurodecoder.analysis.psth import (
     selection_average,
 )
 from neurodecoder.analysis.units import unit_table
+from neurodecoder.data.backends.phy import load_session_phy
 from neurodecoder.data.load import load_session
+from neurodecoder.qc.phy import load_phy_qc_config
 from neurodecoder.qc.units import load_qc_config
 from neurodecoder.viz.studio_plots import population_figure, unit_figure
 
@@ -33,9 +36,9 @@ PAGE = Path(__file__).with_name("index.html")
 
 
 class Studio:
-    def __init__(self, eid: str, backend: str):
-        self.session = load_session(eid, backend)
-        self.units = unit_table(self.session, load_qc_config())
+    def __init__(self, session, qc):
+        self.session = session
+        self.units = unit_table(session, qc)
 
     def _select(self, q: dict) -> "list[str]":
         rows = self.units if q.get("all") == "1" else self.units[self.units["qc_passed"]]
@@ -57,8 +60,11 @@ class Studio:
             "n_trials": self.session.n_trials,
             "n_units_total": len(self.units),
             "n_units_passing": int(self.units["qc_passed"].sum()),
-            "events": {k: v[0] for k, v in EVENTS.items()},
-            "regions": sorted(shown["region"].unique()),
+            "events": available_events(self.session.trials),
+            "regions": sorted(shown["region"].dropna().unique()),
+            "missing": {
+                k: v for k, v in self.session.available.missing.items() if k.startswith("units.")
+            },
             "units": json.loads(rows.to_json(orient="records")),
         }
 
@@ -68,7 +74,8 @@ class Studio:
         p = psth(spikes, events, window, bin_width, baseline)
         trial, rel = raster(spikes, events, window)
         region = self.units.at[q["unit"], "region"]
-        title = f"{q['unit']} ({region}) · {EVENTS[q['event']][0]} · n = {p.n_trials} trials" + (
+        where = "" if pd.isna(region) else f" ({region})"
+        title = f"{q['unit']}{where} · {EVENTS[q['event']][0]} · n = {p.n_trials} trials" + (
             f", {p.n_excluded} without this event excluded" if p.n_excluded else ""
         )
         return unit_figure(trial, rel, p, window, title, baseline is not None)
@@ -134,10 +141,17 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--eid", default="d23a44ef-1402-4ed7-97f5-47e9a7a504d9")
     ap.add_argument("--backend", default="bwm")
+    ap.add_argument("--phy", help="a Kilosort/Phy output folder (one probe); needs --events")
+    ap.add_argument("--events", help="CSV of trial events, seconds on the probe's clock")
     ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args()
-    studio = Studio(args.eid, args.backend)
-    print(f"Neurodecoder Studio: http://127.0.0.1:{args.port}  ({args.eid})", flush=True)
+    if bool(args.phy) != bool(args.events):
+        ap.error("--phy and --events go together")
+    if args.phy:
+        studio = Studio(load_session_phy(args.phy, args.events), load_phy_qc_config())
+    else:
+        studio = Studio(load_session(args.eid, args.backend), load_qc_config())
+    print(f"Neurodecoder Studio: http://127.0.0.1:{args.port}  ({studio.session.eid})", flush=True)
     HTTPServer(("127.0.0.1", args.port), make_handler(studio)).serve_forever()
 
 

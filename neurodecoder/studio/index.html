@@ -23,6 +23,7 @@
   td.num { text-align:right; font-variant-numeric:tabular-nums; }
   tr { cursor:pointer; } tr:hover td { background:#f1f1ef; } tr.sel td { background:var(--sel); }
   .fail { color:#a33; }
+  .missing { color:var(--muted); }
   .plots { display:grid; grid-template-columns:repeat(auto-fit,minmax(420px,1fr)); gap:12px; }
   .plots img { width:100%; display:block; }
   .err { color:#a33; white-space:pre-wrap; }
@@ -70,7 +71,16 @@ async function loadUnits() {
   $('region').length = 1;
   for (const r of data.regions) $('region').add(new Option(r, r));
   $('region').value = data.regions.includes(keep) ? keep : '';
+  const noRegion = data.missing['units.acronym'];
+  $('region').disabled = Boolean(noRegion);
+  $('region').title = noRegion || '';
   renderTable();
+}
+
+// Missing values show as an em dash, never as a number.
+function fmt(v, digits) {
+  if (v === null || v === undefined) return '<span class="missing">—</span>';
+  return typeof v === 'number' ? v.toFixed(digits) : v;
 }
 
 function visible() { return data.units.filter(u => !$('region').value || u.region === $('region').value); }
@@ -80,8 +90,8 @@ function renderTable() {
   if (!rows.some(u => u.id === unit)) unit = rows.length ? rows[0].id : null;
   $('count').textContent = `${rows.length} units`;
   $('rows').innerHTML = rows.map(u => `<tr data-id="${u.id}" class="${u.id === unit ? 'sel' : ''}">
-    <td>${u.id}</td><td>${u.region}</td><td class="num">${u.depth_um.toFixed(0)}</td>
-    <td class="num">${u.firing_rate_hz.toFixed(2)}</td><td class="num">${u.label.toFixed(2)}</td>
+    <td>${u.id}</td><td>${fmt(u.region)}</td><td class="num">${fmt(u.depth_um, 0)}</td>
+    <td class="num">${fmt(u.firing_rate_hz, 2)}</td><td class="num">${fmt(u.label, 2)}</td>
     <td class="${u.qc_passed ? '' : 'fail'}" title="${u.qc_reason}">${u.qc_passed ? 'pass' : 'fail'}</td></tr>`).join('');
   plot();
 }
