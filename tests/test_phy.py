@@ -8,7 +8,7 @@ from phy_folder import write_phy_folder
 from neurodecoder.analysis.units import unit_table
 from neurodecoder.data.backends.phy import load_session_phy, read_params
 from neurodecoder.data.load import load_data_config
-from neurodecoder.qc.phy import PhyUnitQC, load_phy_qc_config, phy_unit_qc
+from neurodecoder.qc.phy import PhyUnitQC, load_phy_qc_config, phy_unit_qc, refractory_passes
 from neurodecoder.qc.units import task_firing_rates
 
 FS = 30000.0
@@ -133,25 +133,41 @@ def test_params_py_is_read_but_never_executed(tmp_path):
         read_params(folder)
 
 
+QC = PhyUnitQC(
+    groups=("good",), min_firing_rate_hz=0.1, refractory_contamination=0.1, refractory_alpha=0.1
+)
+
+
 def test_phy_qc_passes_good_units_that_fire_during_the_task(tmp_path):
     # Task period [0.5, 2.9] s = 2.4 s. Cluster 3: 1 spike (1.0 s) -> 0.417 Hz, good.
     # Cluster 7: no spike inside -> 0 Hz, and mua. Cluster 9: 1 spike, good (KSLabel).
-    # Cluster 11: 1 spike, but no label in either file.
+    # Cluster 11: 1 spike, but no label in either file. The refractory results are
+    # given here (cluster 9 fails) to test the QC logic on its own.
     s = load_session_phy(_folder(tmp_path), _events(tmp_path))
-    qc = PhyUnitQC(groups=("good",), min_firing_rate_hz=0.1)
-    units = s.units.assign(task_firing_rate=task_firing_rates(s))
+    units = s.units.assign(
+        task_firing_rate=task_firing_rates(s), sliding_rp_pass=[True, True, False, True]
+    )
     np.testing.assert_allclose(units["task_firing_rate"], [1 / 2.4, 0, 1 / 2.4, 1 / 2.4])
-    verdict = phy_unit_qc(units, qc)
-    assert verdict["passed"].tolist() == [True, False, True, False]
+    verdict = phy_unit_qc(units, QC)
+    assert verdict["passed"].tolist() == [True, False, False, False]
     assert (
         verdict.at["imec0_7", "reason"]
         == "group mua not in ['good']; task firing rate 0 Hz < 0.1 Hz"
     )
+    assert verdict.at["imec0_9", "reason"] == (
+        "refractory violations: contamination below 0.1 not shown at 0.9 confidence"
+    )
     assert verdict.at["imec0_11", "reason"] == "group missing"
 
 
+def test_units_with_a_few_spikes_fail_the_refractory_test(tmp_path):
+    # One to three spikes each: too few to show low contamination, as in IBL.
+    s = load_session_phy(_folder(tmp_path), _events(tmp_path))
+    assert not refractory_passes(s, QC).any()
+
+
 def test_phy_qc_default_config():
-    assert load_phy_qc_config() == PhyUnitQC(groups=("good",), min_firing_rate_hz=0.1)
+    assert load_phy_qc_config() == QC
 
 
 def test_unit_table_for_phy_data(tmp_path):
@@ -159,7 +175,8 @@ def test_unit_table_for_phy_data(tmp_path):
     table = unit_table(s, load_phy_qc_config())
     assert table["region"].isna().all()
     assert table["label"].tolist()[:3] == ["good", "mua", "good"]
-    assert table["qc_passed"].tolist() == [True, False, True, False]
+    # Every hand-built unit has 1-3 spikes, so all fail the refractory test.
+    assert not table["qc_passed"].any()
     assert (table["probe"] == "imec0").all() and table["lateral_um"].isna().all()
 
 

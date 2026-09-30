@@ -28,7 +28,9 @@ import numpy as np
 from neurodecoder.studio.project import REPO, make_project, view_to_query
 from neurodecoder.viz.studio_plots import (
     build_population_figure,
+    build_tuning_figure,
     build_unit_figure,
+    condition_colours,
     probe_colours,
     save_vector,
 )
@@ -77,30 +79,62 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
 
     if view.get("unit"):
         d = studio.unit_data(q)
-        p = d["psth"]
         fig = build_unit_figure(
-            d["trial"], d["rel"], p, d["window"], d["baseline"] is not None, THEME, d["caption"]
+            d["groups"], d["window"], d["baseline"] is not None, THEME, d["caption"]
         )
         for suffix in ("svg", "pdf"):
             save_vector(fig, out / f"unit.{suffix}")
-        _write_json(
-            out / "unit.json",
-            {
-                "caption": d["caption"],
-                "unit": view["unit"],
-                "window_s": d["window"],
-                "baseline_s": d["baseline"],
-                "psth": {
-                    "bin_centers": p.bin_centers,
-                    "mean": p.mean,
-                    "sem": p.sem,
-                    "n_trials": p.n_trials,
-                    "n_excluded": p.n_excluded,
-                },
-                "raster": {"trial": d["trial"], "time_s": d["rel"]},
-            },
-        )
+
+        def trace(g):
+            p = g.psth
+            return {
+                "condition": g.name,
+                "bin_centers": p.bin_centers,
+                "mean": p.mean,
+                "sem": p.sem,
+                "n_trials": p.n_trials,
+                "n_excluded": p.n_excluded,
+                "raster": {"trial": g.trial, "time_s": g.rel},
+            }
+
+        traces = [trace(g) for g in d["groups"]]
+        sidecar = {
+            "caption": d["caption"],
+            "unit": view["unit"],
+            "split": view.get("split") or None,
+            "window_s": d["window"],
+            "baseline_s": d["baseline"],
+        }
+        if view.get("split"):
+            sidecar["groups"] = traces
+        else:
+            sidecar["psth"] = {
+                k: v for k, v in traces[0].items() if k not in ("condition", "raster")
+            }
+            sidecar["raster"] = traces[0]["raster"]
+        _write_json(out / "unit.json", sidecar)
         files += ["unit.svg", "unit.pdf", "unit.json"]
+
+        if view.get("split"):
+            t = studio.tuning_data(q)
+            curve = t["curve"]
+            fig = build_tuning_figure(
+                list(curve.index),
+                curve["mean_hz"].to_numpy(),
+                curve["sem_hz"].to_numpy(),
+                curve["n"].tolist(),
+                condition_colours(view["split"], t["levels"], THEME),
+                view["split"] in ("contrast", "block"),
+                THEME,
+                t["caption"],
+            )
+            for suffix in ("svg", "pdf"):
+                save_vector(fig, out / f"tuning.{suffix}")
+            _write_json(
+                out / "tuning.json",
+                {"caption": t["caption"], "levels": curve.reset_index().to_dict(orient="list")},
+            )
+            files += ["tuning.svg", "tuning.pdf", "tuning.json"]
 
     d = studio.population_data(q)
     fig, _ = build_population_figure(
@@ -123,6 +157,10 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
     if tested is not None:
         tested.to_csv(out / "responsiveness.csv")
         files.append("responsiveness.csv")
+    chosen = studio._selectivity.get(studio._selectivity_key(q))
+    if chosen is not None:
+        chosen.to_csv(out / "selectivity.csv")
+        files.append("selectivity.csv")
 
     manifest = {
         "run_id": run_id,
@@ -133,6 +171,7 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
         "project": make_project(studio.source, studio.session, studio.qc, view),
         "view": view,
         "responsiveness": None if tested is None else asdict(studio.response_cfg),
+        "selectivity": None if chosen is None else asdict(studio.selectivity_cfg),
         "files": files,
         "versions": {
             "python": platform.python_version(),

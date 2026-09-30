@@ -11,10 +11,11 @@ Uses matplotlib's object API (no pyplot state), so figures are independent.
 
 import io
 import os
+from dataclasses import dataclass
 
 import numpy as np
 from matplotlib import rc_context
-from matplotlib.colors import LinearSegmentedColormap, to_rgb
+from matplotlib.colors import LinearSegmentedColormap, to_hex, to_rgb
 from matplotlib.figure import Figure
 from matplotlib.patches import Patch
 
@@ -123,37 +124,133 @@ def _frame(fig: Figure, title: str | None, ink2: str):
     return add, squeeze
 
 
+@dataclass(frozen=True)
+class TraceGroup:
+    """One condition's raster rows and PSTH; colour None draws the unsplit style."""
+
+    name: str
+    colour: str | None
+    psth: PSTH
+    trial: np.ndarray  # (n_spikes,) trial index within this group
+    rel: np.ndarray  # (n_spikes,) seconds from the event
+
+
+def condition_colours(name: str, levels: tuple[float, ...], theme: str) -> list[str]:
+    """One colour per level. Sided conditions use the diverging pair: left blue, right
+    red, graded by rank for contrast; 0% and the unbiased block get the muted ink. Choice
+    takes the side it reports on correct trials. Outcome uses the categorical slots."""
+    t = _theme(theme)
+    ramp = LinearSegmentedColormap.from_list("sided", t["diverging"])
+
+    def sided(position: float) -> str:  # 0 = strongest left, 1 = strongest right
+        return to_hex(ramp(position))
+
+    if name == "outcome":
+        return [t["categorical"][1] if v < 0 else t["categorical"][0] for v in levels]
+    if name == "side":
+        return [sided(0.0) if v < 0 else sided(1.0) for v in levels]
+    if name == "choice":  # -1 reports right, +1 reports left
+        return [sided(1.0) if v < 0 else sided(0.0) for v in levels]
+    if name == "block":  # p(left) 0.8 is a left block
+        return [t["muted"] if v == 0.5 else sided(0.0 if v > 0.5 else 1.0) for v in levels]
+    if name == "contrast":
+        left = sorted(-v for v in levels if v < 0)
+        right = sorted(v for v in levels if v > 0)
+        out = []
+        for v in levels:
+            if v == 0:
+                out.append(t["muted"])
+                continue
+            mags = left if v < 0 else right
+            reach = 0.2 + 0.3 * (mags.index(abs(v)) + 1) / len(mags)  # never near the midpoint
+            out.append(sided(0.5 - reach if v < 0 else 0.5 + reach))
+        return out
+    return [t["categorical"][i % len(t["categorical"])] for i in range(len(levels))]
+
+
 def build_unit_figure(
-    trial: np.ndarray, rel: np.ndarray, p: PSTH, window, baseline: bool, theme: str, title=None
+    groups: list[TraceGroup], window, baseline: bool, theme: str, title=None
 ) -> Figure:
-    """Raster (top) and PSTH mean ± SEM (bottom) sharing the time axis."""
+    """Raster (top, trials grouped by condition) and PSTH mean ± SEM (bottom), with a
+    legend naming each condition and its trial count when split."""
     t = _theme(theme)
     fig = Figure(figsize=(5.6, 4.6))
-    add, _ = _frame(fig, title, t["ink2"])
-    ax_r = add((0.13, 0.47, 0.84, 0.50))
-    ax_p = add((0.13, 0.11, 0.84, 0.31), sharex=ax_r)
-    ax_r.plot(rel, trial, "|", color=t["ink"], markersize=2.2, markeredgewidth=0.6)
-    ax_r.set_ylim(p.n_trials - 0.5, -0.5)
-    ax_r.set_ylabel("trial")
+    add, squeeze = _frame(fig, title, t["ink2"])
+    split = len(groups) > 1
+    # A split leaves a band between the panels for the legend, off the traces.
+    ax_r = add((0.13, 0.56, 0.84, 0.41) if split else (0.13, 0.47, 0.84, 0.50))
+    ax_p = add((0.13, 0.11, 0.84, 0.29) if split else (0.13, 0.11, 0.84, 0.31), sharex=ax_r)
+    offset = 0
+    for g in groups:
+        ink = g.colour or t["ink"]
+        ax_r.plot(g.rel, g.trial + offset, "|", color=ink, markersize=2.2, markeredgewidth=0.6)
+        offset += g.psth.n_trials
+        if len(groups) > 1:
+            ax_r.axhline(offset - 0.5, color=t["grid"], lw=0.6)
+        line = g.colour or t["series"]
+        p = g.psth
+        ax_p.fill_between(
+            p.bin_centers, p.mean - p.sem, p.mean + p.sem, color=line, alpha=0.18, lw=0
+        )
+        ax_p.plot(p.bin_centers, p.mean, color=line, lw=2, label=f"{g.name} (n = {p.n_trials})")
+    ax_r.set_ylim(offset - 0.5, -0.5)
+    ax_r.set_ylabel("trial, by condition" if len(groups) > 1 else "trial")
     ax_r.tick_params(labelbottom=False)
-    ax_p.fill_between(
-        p.bin_centers, p.mean - p.sem, p.mean + p.sem, color=t["series"], alpha=0.2, lw=0
-    )
-    ax_p.plot(p.bin_centers, p.mean, color=t["series"], lw=2)
     ax_p.set_ylabel("Δ rate (Hz)" if baseline else "rate (Hz)")
     ax_p.set_xlabel("time from event (s)")
     ax_p.set_xlim(*window)
     ax_p.grid(axis="y", color=t["grid"], lw=0.6)
     ax_p.set_axisbelow(True)
+    if split:
+        fig.legend(
+            *ax_p.get_legend_handles_labels(),
+            loc="upper left",
+            bbox_to_anchor=(0.1, 0.545 * squeeze),
+            ncol=min(5, len(groups)),
+            fontsize=6.5,
+            frameon=False,
+            labelcolor=t["ink2"],
+            handlelength=1.2,
+            columnspacing=0.7,
+        )
     for ax in (ax_r, ax_p):
         _style(ax, t)
         ax.axvline(0, color=t["muted"], lw=1, ls=(0, (3, 3)))
     return fig
 
 
-def unit_figure(trial, rel, p: PSTH, window, baseline: bool, theme: str) -> bytes:
+def unit_figure(groups: list[TraceGroup], window, baseline: bool, theme: str) -> bytes:
     """build_unit_figure as a PNG for the page."""
-    return _png(build_unit_figure(trial, rel, p, window, baseline, theme))
+    return _png(build_unit_figure(groups, window, baseline, theme))
+
+
+def build_tuning_figure(
+    names, means, sems, ns, colours, ordinal: bool, theme: str, title=None
+) -> Figure:
+    """Mean ± SEM response rate per condition level, n under each level's label."""
+    t = _theme(theme)
+    fig = Figure(figsize=(5.6, 2.5))
+    add, _ = _frame(fig, title, t["ink2"])
+    ax = add((0.13, 0.26, 0.84, 0.66))
+    x = np.arange(len(names))
+    if ordinal:
+        ax.plot(x, means, color=t["axis"], lw=1, zorder=1)
+    for xi, m, e, c in zip(x, means, sems, colours):
+        ax.errorbar(
+            xi, m, yerr=0 if np.isnan(e) else e, fmt="o", color=c, ms=6, lw=1.5, capsize=0, zorder=2
+        )
+    ax.set_xticks(x, [f"{n}\nn = {k}" for n, k in zip(names, ns)])
+    ax.set_xlim(-0.5, len(names) - 0.5)
+    ax.set_ylabel("response rate (Hz)")
+    ax.grid(axis="y", color=t["grid"], lw=0.6)
+    ax.set_axisbelow(True)
+    _style(ax, t)
+    ax.tick_params(axis="x", labelsize=7)
+    return fig
+
+
+def tuning_figure(names, means, sems, ns, colours, ordinal: bool, theme: str) -> bytes:
+    return _png(build_tuning_figure(names, means, sems, ns, colours, ordinal, theme))
 
 
 def population_figure(scaled, centers, mean, sem, window, theme: str, **stripe):

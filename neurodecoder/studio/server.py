@@ -30,6 +30,12 @@ from neurodecoder.analysis.atlas import (
     region_tree,
     units_in_node,
 )
+from neurodecoder.analysis.conditions import (
+    CONDITIONS,
+    available_conditions,
+    condition,
+    split_event_times,
+)
 from neurodecoder.analysis.events import EVENTS, available_events, event_times
 from neurodecoder.analysis.psth import (
     alternate_halves,
@@ -42,6 +48,12 @@ from neurodecoder.analysis.psth import (
     selection_average,
 )
 from neurodecoder.analysis.responsiveness import load_response_config, responsiveness
+from neurodecoder.analysis.tuning import (
+    COMPARISONS,
+    load_selectivity_config,
+    selectivity,
+    tuning_curve,
+)
 from neurodecoder.analysis.units import unit_table
 from neurodecoder.data.atlas_meshes import mesh_path
 from neurodecoder.data.load import load_data_config
@@ -55,7 +67,15 @@ from neurodecoder.studio.project import (
     open_project,
     save_project,
 )
-from neurodecoder.viz.studio_plots import THEMES, population_figure, probe_colours, unit_figure
+from neurodecoder.viz.studio_plots import (
+    THEMES,
+    TraceGroup,
+    condition_colours,
+    population_figure,
+    probe_colours,
+    tuning_figure,
+    unit_figure,
+)
 
 HERE = Path(__file__).parent
 STATIC = HERE / "static"
@@ -94,6 +114,9 @@ class Studio:
         self.has_regions = "units.acronym" in session.available.present
         self.has_positions = all(f"units.{a}" in session.available.present for a in "xyz")
         self.response_cfg = load_response_config()
+        self.selectivity_cfg = load_selectivity_config()
+        # (event, condition, all units, probe) -> result: BH ran over exactly that set.
+        self._selectivity: dict[tuple[str, str, bool, str], pd.DataFrame] = {}
         self.probes = sorted(self.units["probe"].unique())
         # (event, all units, probe) -> result: BH ran over exactly that unit set.
         self._tests: dict[tuple[str, bool, str], pd.DataFrame] = {}
@@ -152,6 +175,13 @@ class Studio:
             "response": dict(self.response_cfg.__dict__),
             "probes": self.probes,
             "probe_colours": {theme: probe_colours(self.probes, theme) for theme in THEMES},
+            "conditions": available_conditions(self.session.trials),
+            "comparisons": {
+                name: [condition(self.session.trials, name).names[i] for i in (0, -1)]
+                for name in available_conditions(self.session.trials)
+                if name in COMPARISONS
+            },
+            "selectivity": dict(self.selectivity_cfg.__dict__),
             "project": {
                 "path": None if self.project_path is None else str(self.project_path),
                 "view": self.view,
@@ -217,11 +247,59 @@ class Studio:
             rows = rows.assign(
                 resp_q=t["q"], resp_p=t["p"], resp_hz=t["statistic_hz"], resp=verdict
             )
+        chosen = self._selectivity.get(self._selectivity_key(q))
+        if chosen is not None:
+            t = chosen.reindex(rows.index)
+            rows = rows.assign(sel_auroc=t["auroc"], sel_p=t["p"], sel_q=t["q"], sel=t["selective"])
         return {
             "level": self._level(q) if self.has_regions else None,
             "units": _records(rows.reset_index().rename(columns={"unit_id": "id"})),
             "tree": tree,
             "test": None if tested is None else self._summary(tested),
+            "selectivity": None if chosen is None else self._selectivity_summary(chosen, q),
+        }
+
+    def _selectivity_key(self, q: dict) -> tuple[str, str, bool, str]:
+        return q.get("event", ""), q.get("split", ""), q.get("all") == "1", q.get("probe", "")
+
+    def selectivity_json(self, q: dict) -> dict:
+        """Run (or reuse) the selectivity test for the split condition on the shown units."""
+        if not q.get("split"):
+            raise ValueError("choose a condition to split by first")
+        key = self._selectivity_key(q)
+        if key not in self._selectivity:
+            ids = self._select({"all": q.get("all", "0"), "probe": q.get("probe", "")})
+            if not ids:
+                raise ValueError("no units to test")
+            self._selectivity[key] = selectivity(
+                self.session.spikes,
+                ids,
+                self.session.trials,
+                q["event"],
+                q["split"],
+                self.response_cfg,
+                self.selectivity_cfg,
+            )
+        return self._selectivity_summary(self._selectivity[key], q)
+
+    def _selectivity_summary(self, t: pd.DataFrame, q: dict) -> dict:
+        names = condition(self.session.trials, q["split"]).names
+        higher_b = t["selective"] & (t["auroc"] > 0.5)
+        return {
+            "condition": CONDITIONS[q["split"]][0],
+            "a": names[0],
+            "b": names[-1],
+            "n_tests": int(t["n_tests"].iloc[0]),
+            "n_selective": int(t["selective"].sum()),
+            "n_higher_b": int(higher_b.sum()),
+            "n_higher_a": int((t["selective"] & ~higher_b).sum()),
+            "n_a": int(t["n_a"].iloc[0]),
+            "n_b": int(t["n_b"].iloc[0]),
+            "null": t["null"].iloc[0],
+            "n_null": int(t["n_null"].iloc[0]),
+            "window": t["window"].iloc[0],
+            "seed": int(t["seed"].iloc[0]),
+            "probes": sorted(self.units.loc[t.index, "probe"].unique()),
         }
 
     def probe_json(self, q: dict) -> dict:
@@ -271,28 +349,71 @@ class Studio:
         """Every number the selected unit's figure plots, and its caption."""
         window, bin_width, baseline, events = self._params(q)
         spikes = self.session.spikes[q["unit"]]
-        p = psth(spikes, events, window, bin_width, baseline)
-        trial, rel = raster(spikes, events, window)
         region = self._regions(q)[q["unit"]]
         where = "" if pd.isna(region) else f" · {region}"
-        caption = f"{q['unit']}{where} · {EVENTS[q['event']][0]} · n = {p.n_trials} trials" + (
-            f", {p.n_excluded} without this event excluded" if p.n_excluded else ""
+        split = q.get("split", "")
+        if split:
+            cond = condition(self.session.trials, split)
+            colours = condition_colours(split, cond.levels, q.get("theme", "light"))
+            groups = []
+            for part, colour in zip(
+                split_event_times(self.session.trials, q["event"], cond), colours
+            ):
+                if not np.isfinite(part.times).any():
+                    continue  # e.g. error trials when aligned to reward feedback
+                trial, rel = raster(spikes, part.times, window)
+                p = psth(spikes, part.times, window, bin_width, baseline)
+                groups.append(TraceGroup(part.name, colour, p, trial, rel))
+            n = sum(g.psth.n_trials for g in groups)
+            excluded = f", {cond.n_excluded} {cond.excluded} excluded" if cond.n_excluded else ""
+            caption = (
+                f"{q['unit']}{where} · {EVENTS[q['event']][0]} · split by "
+                f"{CONDITIONS[split][0].lower()} · n = {n} trials{excluded}"
+            )
+        else:
+            p = psth(spikes, events, window, bin_width, baseline)
+            trial, rel = raster(spikes, events, window)
+            groups = [TraceGroup("all trials", None, p, trial, rel)]
+            caption = f"{q['unit']}{where} · {EVENTS[q['event']][0]} · n = {p.n_trials} trials" + (
+                f", {p.n_excluded} without this event excluded" if p.n_excluded else ""
+            )
+        return {"groups": groups, "window": window, "baseline": baseline, "caption": caption}
+
+    def tuning_data(self, q: dict) -> dict:
+        """Mean ± SEM response rate per level of the split condition, with n per level."""
+        split = q.get("split", "")
+        if not split:
+            raise ValueError("choose a condition to split by for a tuning curve")
+        window = self.response_cfg.response_window
+        curve = tuning_curve(
+            self.session.spikes[q["unit"]], self.session.trials, q["event"], split, window
         )
-        return {
-            "trial": trial,
-            "rel": rel,
-            "psth": p,
-            "window": window,
-            "baseline": baseline,
-            "caption": caption,
-        }
+        cond = condition(self.session.trials, split)
+        caption = (
+            f"{q['unit']} · response rate {window[0] * 1000:g} to {window[1] * 1000:g} ms after "
+            f"{EVENTS[q['event']][0].lower()}, by {CONDITIONS[split][0].lower()} · mean ± SEM"
+        )
+        return {"curve": curve, "levels": cond.levels, "caption": caption}
+
+    def tuning_png(self, q: dict) -> tuple[bytes, dict]:
+        d = self.tuning_data(q)
+        curve, split = d["curve"], q["split"]
+        colours = condition_colours(split, d["levels"], q.get("theme", "light"))
+        png = tuning_figure(
+            list(curve.index),
+            curve["mean_hz"].to_numpy(),
+            curve["sem_hz"].to_numpy(),
+            curve["n"].tolist(),
+            colours,
+            split in ("contrast", "block"),
+            q.get("theme", "light"),
+        )
+        return png, {"X-Caption": quote(d["caption"])}
 
     def unit_png(self, q: dict) -> tuple[bytes, dict]:
         d = self.unit_data(q)
         theme = q.get("theme", "light")
-        png = unit_figure(
-            d["trial"], d["rel"], d["psth"], d["window"], d["baseline"] is not None, theme
-        )
+        png = unit_figure(d["groups"], d["window"], d["baseline"] is not None, theme)
         return png, {"X-Caption": quote(d["caption"])}
 
     def population_data(self, q: dict) -> dict:
@@ -375,6 +496,8 @@ def make_handler(studio: Studio):
         "/api/probe": ("application/json", as_json(studio.probe_json)),
         "/api/geometry": ("application/json", as_json(studio.geometry_json)),
         "/api/test": ("application/json", as_json(studio.test_json)),
+        "/api/selectivity": ("application/json", as_json(studio.selectivity_json)),
+        "/api/tuning.png": ("image/png", studio.tuning_png),
         "/api/unit.png": ("image/png", studio.unit_png),
         "/api/population.png": ("image/png", studio.population_png),
         "/": ("text/html; charset=utf-8", lambda q: ((HERE / "index.html").read_bytes(), {})),

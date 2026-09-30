@@ -58,6 +58,7 @@ DEFAULT_VIEW = {
     "responsive": False,
     "unit": None,
     "probe": "",  # "" is every probe; added after version 1 files, which open on all probes
+    "split": "",  # "" is no condition split; added later, older files open unsplit
 }
 
 

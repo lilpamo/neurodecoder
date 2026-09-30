@@ -23,7 +23,8 @@ def _studio(tmp_path) -> Studio:
     )
     EVENTS.to_csv(tmp_path / "events.csv", index=False)
     session = load_session_phy(folder, tmp_path / "events.csv")
-    return Studio(session, PhyUnitQC(groups=("good",), min_firing_rate_hz=0.1), tmp_path / "atlas")
+    qc = PhyUnitQC(("good",), 0.1, refractory_contamination=0.1, refractory_alpha=0.1)
+    return Studio(session, qc, tmp_path / "atlas")
 
 
 def test_static_files_never_escape_the_static_folder():
@@ -177,3 +178,56 @@ def test_the_3d_view_follows_the_probe_filter_on_real_data(tmp_path):
     assert [t["probe"] for t in one["tracks"]] == ["probe00"]
     assert {u["id"].split("_")[0] for u in one["units"]} == {"probe00"}
     assert len(one["units"]) < len(both["units"])
+
+
+def test_conditions_offered_follow_the_events_file(tmp_path):
+    studio = _studio(tmp_path)  # events: intervals and stimOn only
+    assert studio.session_json({})["conditions"] == {}
+    with pytest.raises(ValueError, match="choose a condition"):
+        studio.tuning_png({**PLOT, "unit": "imec0_3"})
+
+
+def test_split_tuning_and_selectivity_on_real_data(tmp_path):
+    from neurodecoder.data.load import load_data_config, load_session
+    from neurodecoder.qc.units import load_qc_config
+    from neurodecoder.studio.export import export_view
+    from neurodecoder.studio.project import DEFAULT_VIEW, Source
+
+    eid = "d23a44ef-1402-4ed7-97f5-47e9a7a504d9"
+    try:
+        session = load_session(eid, "bwm")
+    except (OSError, ValueError) as e:
+        pytest.skip(f"d23a44ef not available: {e}")
+    source = Source(kind="ibl", eid=eid, backend="bwm")
+    studio = Studio(session, load_qc_config(), load_data_config().data_root / "atlas", source)
+    q = {
+        "event": "stim_on",
+        "t0": "-0.5",
+        "t1": "1.0",
+        "bin": "0.02",
+        "split": "choice",
+        "unit": "probe00_3",
+        "theme": "light",
+    }
+    assert set(studio.session_json({})["conditions"]) == {
+        "side",
+        "contrast",
+        "choice",
+        "outcome",
+        "block",
+    }
+    groups = studio.unit_data(q)["groups"]
+    assert [g.name for g in groups] == ["right (-1)", "left (+1)"]
+    assert sum(g.psth.n_trials for g in groups) == 410
+    assert "split by choice" in unquote(studio.unit_png(q)[1]["X-Caption"])
+    curve = studio.tuning_data({**q, "split": "contrast"})["curve"]
+    assert curve["n"].sum() == 410 and len(curve) == 9
+    summary = studio.selectivity_json(q)
+    assert summary["n_tests"] == 390 and summary["null"] == "choice permuted within signed contrast"
+    rows = studio.units_json(q)["units"]
+    assert all(0 <= r["sel_auroc"] <= 1 for r in rows)
+    assert studio.units_json(q)["selectivity"]["n_selective"] == summary["n_selective"]
+    view = {**DEFAULT_VIEW, "event": "stim_on", "split": "choice", "unit": "probe00_3"}
+    out = export_view(studio, view, tmp_path / "runs")
+    names = {p.name for p in out.iterdir()}
+    assert {"tuning.svg", "tuning.json", "selectivity.csv"} <= names

@@ -6,6 +6,122 @@ first.
 
 ---
 
+### 2026-09-30 — Condition-split PSTHs, tuning curves and selectivity (`analysis/conditions.py`, `analysis/tuning.py`, `configs/selectivity.yaml`)
+
+**What (the user's step 5):**
+- **Conditions from the trials table:** stimulus side, signed contrast, choice,
+  outcome and block. Only those whose columns exist are offered, so Phy sessions
+  get what their events CSV has.
+- **Split PSTH:** one mean ± SEM trace per condition, with a legend giving n per
+  condition, and the raster grouped by condition.
+- **Tuning curve:** mean ± SEM response rate per level in `configs/analysis.yaml`'s
+  response window, with n per level.
+- **Selectivity:** AUROC between two conditions per unit, against a null, with
+  Benjamini–Hochberg across the units tested. `n_tests`, the null, the number of
+  draws, the seed and the window are always shown.
+- **Settings:** `n_permutations`, `n_pseudo_sessions` (10,000 each), `seed` and
+  `min_trials` are in `configs/selectivity.yaml`.
+
+**Conventions, checked on d23a44ef rather than assumed:**
+- **Contrast:** each trial sets exactly one of `contrastLeft` or `contrastRight`,
+  and the side without a stimulus is NaN. Zero contrast is 0 on the stimulus side.
+  Trials that break this are excluded and counted.
+- **Choice:** on correct trials a right stimulus has `choice = -1` and a left one
+  `+1`, so the levels are named "right (-1)" and "left (+1)".
+- **No-go trials** (choice 0) are excluded and counted.
+
+**Nulls:**
+- **Choice:** labels permuted within signed-contrast strata, as the user asked.
+- **Block:** IBL-generator pseudo-sessions (`evaluation/nulls.py`), as the user
+  asked.
+- **Speed:** AUROC comes from rank sums. Ranks don't depend on labels, so each
+  unit's ranks are computed once and every draw is one matrix product, which
+  takes under a second for 390 units.
+
+**Choices beyond the user's spec, flagged for review:**
+1. **Side:** permuted within choice strata. This is the mirror of the choice/contrast
+   confound: without it, a choice-driven unit would be called stimulus-selective.
+2. **Outcome:** permuted within signed-contrast strata, because errors concentrate
+   at low contrast.
+3. **Choice and outcome strata split 0% contrast by stimulus side.** At 0% the
+   rewarded side still differs and choice tracks it, so one merged 0% stratum
+   would leave choice confounded with side. Display and tuning keep IBL's single
+   0%.
+4. **Block:** uses the pre-event (baseline) window. The block prior predicts the
+   stimulus side 80% of the time, so a post-stimulus window would count stimulus
+   responses as block selectivity. IBL's Brain Wide Map decoded block before the
+   stimulus.
+
+**Checks (test-only Poisson spike trains, never shown as data):**
+- **By hand:** a tuning curve, AUROC with ties, and response rates.
+- **Stratified permutations** keep every stratum's label counts, and are seeded.
+- **Calibration:** p is uniform for side, choice, outcome and block (KS p from
+  0.15 to 0.62). BH rejects in at most 5 of 40 all-null datasets.
+- **Choice confound:** on units driven only by the stimulus side, a plain shuffle
+  flags 100% as choice-selective; the stratified null flags 6.7%.
+- **Block:** a plain permutation flags drifting units far more often than
+  pseudo-sessions do. **The pseudo-session null is valid on average over block
+  sequences, not for every sequence.**
+  - Across 30 sequences, drifting units reached p < 0.05 3.3% of the time
+    (median 0%, maximum 15%).
+  - One atypical sequence gave 18%.
+  - The test averages over 12 sequences.
+
+**Real data (d23a44ef, 390 QC-passing units, stimulus onset):**
+
+| Condition | Selective | Direction |
+|---|---|---|
+| side | 64 | 40 higher for right |
+| choice | 55 | 32 higher for left |
+| outcome | 3 | |
+| block | 0 | pre-event window, smallest p 0.0034 |
+
+**Limitation:** within strata, trials are treated as exchangeable. Slow drift in a
+unit's rate is accounted for only by the block null.
+
+### 2026-09-30 — Phy QC gains IBL's sliding refractory-period test (`qc/refractory.py`)
+
+**Decision (the user's, of three options):** port ibllib's **MIT-licensed**
+`brainbox.metrics.single_units.slidingRP_viol`, with attribution. It needs no new
+dependency.
+- **The test:** for refractory periods of 1.25–10 ms, a unit passes if its count of
+  close spike pairs is at or below the 10% Poisson quantile expected at 10%
+  contamination. Low-rate units fail by design.
+- **Config:** `refractory_contamination: 0.1` and `refractory_alpha: 0.1` are in
+  `configs/qc_phy.yaml`. The algorithm's fixed parts (20 kHz samples, 0.25 ms
+  bins, the tested refractory periods) are constants in the module.
+- **Correlogram:** phylib's autocorrelogram (BSD-3-Clause) is computed with sorted
+  searches instead of its shift loop.
+
+**Rejected:**
+- **Depending on `slidingRP` 1.1.1:** it is GPL-3.0 and adds statsmodels and
+  colorcet. Distributing Studio, for example in the planned installer, would then
+  need a GPL-compatible licence, and the repo has none yet.
+- **Hill et al. ISI violations:** simple, but not aligned with IBL's QC.
+
+**Checks:**
+- **Faithful port:** identical to ibllib's original code (run with phylib's
+  original correlogram) on all 73 checked clusters of d23a44ef probe00.
+- **Against IBL's stored flags:** the port agrees on 553 of 674 clusters. 94
+  clusters pass only IBL's flag and 27 pass only the port. IBL's stored value
+  comes from the newer GPL implementation, which works at 1/30,000 s resolution
+  and passes more units, so the two are not the same test.
+- **Real-data regression test:** it pins 553 of 674.
+
+**Effect on Phy QC (probe00 of the Phy-format d23a44ef folder):** 161 units pass,
+down from 200.
+- 101 pass both Phy QC and IBL's `label == 1` (was 103).
+- 60 pass only Phy QC (was 97).
+- 13 pass only IBL's QC (was 11).
+
+The rest of the gap is IBL's noise-cutoff and amplitude metrics. They need spike
+amplitudes in volts, which a Phy folder doesn't give.
+
+**Consequences:**
+- Phy projects saved before this warn that `configs/qc_phy.yaml` changed when
+  reopened.
+- Studio's start-up on a Phy folder takes about 7 s longer for 674 clusters.
+
 ### 2026-09-30 — Probe filter in Studio
 
 **Decision (the user's):** a probe filter, All or one probe. It applies to:

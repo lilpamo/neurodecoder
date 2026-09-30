@@ -21,7 +21,8 @@ Phy QC"):
 - **Events CSV:** canonical trial column names, and it must include
   `intervals_0` and `intervals_1`. Events outside the span of the recorded
   spikes are refused.
-- **Phy QC:** group in `[good]` and a task-period rate of at least 0.1 Hz.
+- **Phy QC:** group in `[good]` and a task-period rate of at least 0.1 Hz. IBL's
+  sliding refractory-period test was added later (see step 3).
 - **Opening data:** through server flags (`--phy FOLDER --events CSV`). The
   folder-picker question is still open.
 
@@ -113,7 +114,9 @@ hover or zoom.
 Built (`docs/DECISIONS.md`, "Responsiveness against a shift null"), with one change
 to the plan below: instead of 1,000 seeded random shifts, **every** circular shift
 on a 5 ms grid is evaluated by FFT, so the test is deterministic and p is not
-floored near 0.001. The refractory-period metric for Phy QC is still open.
+floored near 0.001. The refractory-period metric for Phy QC was added afterwards: a
+port of ibllib's MIT `slidingRP_viol` (`docs/DECISIONS.md`, "Phy QC gains IBL's sliding
+refractory-period test").
 
 
 **What:** per unit and event, a p-value for "the rate in a response window
@@ -145,9 +148,9 @@ even trials. This fixes the prototype's known circularity.
 **UI:** a "responsive" column in the unit table, with p and q values. The
 population heatmap gains a "responsive only" filter.
 
-**Phy QC:** consider adding a refractory-period metric computed from spike
-times. Kilosort's `good` passes 200 units on d23a44ef probe00, where IBL's label
-passes 114 (see step 1's DECISIONS entry).
+**Phy QC:** a refractory-period metric was added (IBL's sliding RP test, MIT port).
+Phy QC now passes 161 units on d23a44ef probe00, down from 200; IBL's label passes
+114, and 101 pass both.
 
 ## 4. Project file and figure export — built (2026-09-30)
 
@@ -182,9 +185,301 @@ names the file.
 - A changed spike file triggers the hash warning.
 - The exported sidecar equals the engine's output.
 
+## Planned, not built: steps 5–14
+
+Each step says:
+- what it adds;
+- the null it needs if it labels units (R4: a label such as "tuned" or
+  "connected" is a claim, and ships with a null and a multiple-testing correction
+  over the units tested);
+- what Phy data lacks for it;
+- its tests.
+
+As in steps 1–4, the engine goes in `analysis/`, the UI draws only, and a test is
+written first where the contract is clear.
+
+## 5. Condition-split PSTHs and tuning — built (2026-09-30)
+
+Built (`docs/DECISIONS.md`, "Condition-split PSTHs, tuning curves and
+selectivity").
+- **As planned:** choice is permuted within signed-contrast strata, and block
+  uses pseudo-sessions.
+- **Also stratified:** side within choice, and outcome within signed contrast.
+- **Strata:** 0% contrast is split by side.
+- **Block window:** block uses the pre-event window.
+- **Validity:** the pseudo-session null is valid on average over block
+  sequences, not for every single session.
+
+
+**Adds:**
+- **Condition-split PSTHs:** PSTHs split by a task variable (stimulus side, signed
+  contrast, choice, feedback, block prior), overlaid, with a trial count per
+  condition.
+- **Tuning curves:** response-window rate against signed contrast, mean ± SEM
+  per level.
+- **Where:** `analysis/conditions.py` and `analysis/tuning.py`.
+
+**Null, for "selective" or "tuned" labels:**
+- **Why a plain shuffle fails:** IBL's task variables are correlated. Choice
+  follows stimulus side, and the block prior predicts side. So a plain label
+  shuffle calls a purely stimulus-driven unit "choice-selective".
+- **Choice and side:** a conditional permutation, shuffling labels only within
+  strata of the other variables (the condition-combined test IBL's Brain Wide Map
+  used).
+- **Block:** the pseudo-session null (`evaluation/nulls.py` already has a seeded
+  port of IBL's block generator), because blocks are autocorrelated.
+- **Tuning:** Spearman correlation with contrast, against contrast labels
+  permuted within stimulus side.
+- **Correction:** Benjamini–Hochberg (BH) across the units tested, with explicit
+  seeds.
+
+**Phy data:**
+- Every condition needs its canonical column in the events CSV (`contrastLeft`,
+  `contrastRight`, `choice`, `feedbackType`, `probabilityLeft`). A condition
+  without its column is unavailable, with the reason shown.
+- The pseudo-session null exists only for IBL's block generator, so block
+  selectivity is refused for other tasks.
+
+**Tests:**
+- A split PSTH checked by hand, extending the prototype's hand-computed PSTH
+  example with condition labels.
+- A tuning curve checked by hand.
+- **Calibration:** a simulated unit driven only by stimulus side, with choice
+  correlated to side:
+  - the conditional null keeps choice p-values uniform;
+  - a plain shuffle doesn't. This is the test that justifies the null.
+- The pseudo-session null reused unchanged.
+
+## 6. Movement controls
+
+**Adds:** separates rate changes around an event from movement, the confound step 3
+found. 320 of 390 units "change around stimulus onset", with the baseline in the
+quiescence period.
+- **Wheel speed:** the wheel-speed PSTH drawn beside the neural one, from
+  `behaviour.wheel`.
+- **Reaction time:** stimulus-aligned PSTHs split by early and late movers.
+- **A movement-free test:** the responsiveness test restricted to trials where
+  the first movement comes after the response window ends.
+- **A "movement-locked" label:** it compares alignment to each trial's own first
+  movement with alignment to shifted movement times.
+
+**Null:**
+- **Movement-free test:** step 3's circular-shift null on the restricted trials,
+  reporting how many trials remain.
+- **"Movement-locked":** reaction times permuted across trials within each
+  contrast level. A unit is labelled only if alignment to its own trial's movement
+  beats the permuted alignments.
+- **Correction:** BH across the units tested.
+
+**Phy data:**
+- Phy import reads spikes and events only, so there is no wheel. The wheel-speed
+  panel and wheel-based movement onsets are declared missing.
+- Only `firstMovement_times` supplied in the events CSV enables the movement-free
+  test.
+
+**Tests:**
+- Hand-checked trial selection by reaction time.
+- A hand-checked wheel-speed alignment.
+- **Simulation:** a unit locked only to movement:
+  - responsive at stimulus onset over all trials;
+  - not responsive in movement-free trials;
+  - labelled movement-locked.
+- Null calibration on units with no locking.
+
+## 7. Unit quality panel
+
+**Adds:** a per-unit panel showing:
+- the ISI histogram with refractory lines;
+- the autocorrelogram;
+- the sliding refractory-period details (pair counts against the Poisson bound
+  at each refractory period tested);
+- firing rate and spike count across the session (presence and stability);
+- the mean waveform when available;
+- every QC reason.
+
+**Null:** none new. It shows the QC results already computed. The sliding RP test
+already carries its own confidence level, and it labels quality, not responses. Any
+new quality label (drift, say) must use IBL's metric definition and its threshold
+from config.
+
+**Phy data:**
+- **Waveforms:** they need the raw `.dat` file (not read) or `templates.npy` and
+  the whitening inverse.
+- **Amplitudes:** `amplitudes.npy` is in template units, not volts, so IBL's
+  amplitude and noise-cutoff metrics stay missing.
+- **IBL waveforms:** available through ONE (`clusters.waveforms`, cached for
+  d23a44ef).
+
+**Tests:**
+- ISI histogram and autocorrelogram counts checked by hand.
+- The panel's sliding-RP details reproduce `sliding_rp_pass`'s verdict for every
+  probe00 cluster.
+- A presence ratio checked by hand.
+
+## 8. Cross-correlograms
+
+**Adds:**
+- **Views:** cross-correlograms for chosen pairs, within or across probes, raw
+  and jitter-corrected.
+- **Label:** putative monosynaptic connections.
+
+**Null, for "connected":**
+- **Test:** interval jitter (Amarasingham et al. 2012). Spikes are resampled
+  within fixed windows of a few ms, which keeps slow co-modulation and breaks
+  millisecond timing.
+- **Correction:** BH across the pairs tested, reporting their number. Pairs grow
+  as n².
+- **Seed:** explicit.
+
+**Phy data:**
+- Works from spike times alone.
+- Sorting hides near-simultaneous spikes on nearby channels (overlapping
+  templates), which makes a false dip at zero lag. Close pairs need
+  `channel_positions.npy` to be flagged; without it the flag is declared missing.
+
+**Tests:**
+- Cross-correlogram counts checked by hand.
+- **Calibration:** jitter p-values are uniform on independent Poisson pairs.
+- An injected 2 ms excitatory coupling is detected.
+- A same-channel pair is flagged.
+
+## 9. Population trajectories
+
+**Adds:**
+- **Plot:** condition-averaged population activity projected on principal
+  components, in 2D or 3D.
+- **Cross-validation:** components are fit on odd trials and data projected from
+  even trials, the heatmap rule from step 3.
+- **Naming:** axes are named `pc_k` (R5): no interpretation in code or plots.
+
+**Null:** none while it is descriptive. A claim that trajectories differ between
+conditions would need a distance statistic against condition labels permuted
+within strata (as in step 5). Until that exists, no labels.
+
+**Phy data:** works. There is no region grouping without channel locations (step 13).
+
+**Tests:**
+- Planted low-rank data is recovered.
+- Cross-validated projection never uses held-out trials in the fit.
+- The page shows no labels.
+
+## 10. Decoding in Studio
+
+**Adds:**
+- **Scope:** decode a task variable from the selected units of one session
+  through the existing six-row evaluation contract (`evaluation/contract.py`),
+  with the split registry (R1, R2).
+- **Display:** the page shows the full table and the null verdicts, never a bare
+  score, per the Phase 8b rules.
+- **Phase 3 result:** the gate did not pass (`docs/NEGATIVE_RESULTS.md`). So a
+  result that doesn't beat `null_trialstruct` is said plainly.
+
+**Null:** already in the contract: `null_shuffle`, `null_trialstruct`, and
+pseudo-sessions for block.
+
+**Phy data:**
+- Targets need canonical trial columns, and wheel velocity needs a wheel (see
+  step 6).
+- The split registry is built around IBL session manifests. It needs a
+  single-session path for a non-IBL folder, still with whole-trial blocks and a
+  gap.
+
+**Tests:**
+- Studio's result equals the CLI's for the same units, split and seed.
+- The guards refuse a random time-point split.
+- The page renders all six rows and the verdict.
+
+## 11. Session picker and unit browsing
+
+**Adds:**
+- **Opening sessions:** a list of cached IBL sessions (from the data manifest)
+  and of Phy folders under a configured root, with a path field that completes
+  against those roots. This resolves step 1's folder-picker question.
+- **Browsing units:** unit search by id or region, next and previous with the
+  keyboard, and pinned units.
+
+**Null:** none. There are no labels.
+
+**Phy data:** needs a configured root and a rule for pairing each folder with its
+events CSV (by default `events.csv` beside `params.py`).
+
+**Tests:**
+- Listing matches the manifest.
+- Paths outside the configured roots are refused, including traversal.
+- Switching session resets the selection, caches and responsiveness results.
+
+## 12. Across-session region summaries
+
+**Adds:**
+- **Per region:** the fraction of responsive or tuned units per Beryl region
+  across sessions.
+- **Distribution:** always shown per session, never only pooled (§5).
+- **Map:** a Swanson flatmap from iblatlas.
+
+**Null, for region-level claims** (for example, "region X has more responsive
+units than chance"):
+- **Test:** sessions are the unit of inference. The null permutes region labels
+  across units within each session, or uses a mixed model with session as a
+  random effect.
+- **Correction:** FDR across regions.
+- **Minimum:** a minimum number of sessions per region, with smaller regions
+  refused.
+- **Counts:** units and sessions are reported per region.
+
+**Phy data:** no regions, so excluded until channel locations are imported (step 13).
+
+**Tests:**
+- Aggregation checked by hand.
+- The per-session distribution is present.
+- A region below the session minimum is refused.
+- **Calibration:** the region-level null stays calibrated when units are pooled
+  unevenly across sessions.
+
+## 13. Phy sync and channel locations
+
+**Adds:**
+- **Sync:** event times are aligned from the behaviour or NIDQ clock to the
+  probe clock, from SpikeGLX sync pulses (offset plus linear drift). The fit
+  residuals are reported, and it refuses above a tolerance. This replaces step
+  1's rule that events must already be on the probe clock.
+- **Channel locations:** histology-aligned channel positions are imported (IBL's
+  alignment output `channel_locations.json`, or a CSV of channel to CCF position
+  and acronym). This gives Phy units regions, the region tree and the 3D view.
+
+**Null:** none. Validation is by fit residuals and known answers, not labels.
+
+**Phy data:** this step fills the gaps listed in steps 1, 2, 5 and 12.
+
+**Tests:**
+- **Sync:**
+  - planted drift and offset are recovered from simulated pulses;
+  - on d23a44ef, sync pulses from ONE reproduce IBL's own alignment within a
+    stated tolerance.
+- **Channel locations:** an import round trip, with units mapping to the same
+  acronyms as the BWM backend.
+
+## 14. Installer (Phase 8b)
+
+**Adds:**
+- **Installer:** a one-step installer for macOS, Windows and Linux. The options
+  to evaluate are conda constructor, pixi and PyInstaller.
+- **Contents:** Python 3.11, the dependencies with their pins (the llvmlite/numba
+  note in DECISIONS), and the vendored three.js.
+- **In-app data:** downloads with progress for sessions, meshes and volumes.
+- **Licence first:** the repo needs a licence before anything is distributed.
+  This is why the GPL `slidingRP` package was not used.
+
+**Null:** none.
+
+**Phy data:** nothing specific, but folders must stay local and are never
+uploaded.
+
+**Tests:**
+- A clean-machine install smoke test per OS in CI.
+- The app starts offline with its vendored assets.
+- A check that every bundled dependency's licence is compatible with the repo's.
+
 ## Not in these steps
 
-- Tuning curves (contrast, choice).
-- Sync or alignment tools, and importing channel locations for Phy data.
-- Multiple sessions per project.
-- The installer (Phase 8b).
+- Spike sorting and curation. They stay upstream by design (CLAUDE.md §2).
+- Hosted deployment. Studio is a local app only.

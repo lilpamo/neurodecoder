@@ -41,6 +41,12 @@
       <label class="check"><input type="checkbox" id="responsive" disabled> Responsive only</label>
     </section>
     <section>
+      <h2>Selectivity</h2>
+      <p class="note" id="selWhat">Choose a condition to split by.</p>
+      <button class="btn" id="runSel" disabled>Test selectivity</button>
+      <p class="note" id="selSummary"></p>
+    </section>
+    <section>
       <h2>Region level</h2>
       <div class="seg" id="level" role="group" aria-label="Region level"></div>
       <p class="note" id="levelNote"></p>
@@ -54,6 +60,7 @@
   <main>
     <div class="toolbar">
       <label>Event <select id="event"></select></label>
+      <label>Split by <select id="split"><option value="">None</option></select></label>
       <label>Window <input type="number" id="t0" value="-0.5" step="0.1"> to <input type="number" id="t1" value="1.0" step="0.1"> s</label>
       <label>Bin <input type="number" id="bin" value="0.02" step="0.005" min="0.001"> s</label>
       <label class="check"><input type="checkbox" id="baseline"> Subtract baseline</label>
@@ -64,7 +71,7 @@
       <section class="card area-table">
         <header><h3>Units</h3><span class="meta" id="tableMeta"></span></header>
         <div class="table"><table>
-          <thead><tr><th>Unit</th><th>Region</th><th class="num">Depth µm</th><th class="num">Rate Hz</th><th>Label</th><th>QC</th><th title="Responsive to this event (q &lt; alpha)">Resp.</th></tr></thead>
+          <thead><tr><th>Unit</th><th>Region</th><th class="num">Depth µm</th><th class="num">Rate Hz</th><th>Label</th><th>QC</th><th title="Responsive to this event (q &lt; alpha)">Resp.</th><th class="num" title="Selectivity: AUROC between the split's two conditions; * when q &lt; alpha">Sel.</th></tr></thead>
           <tbody id="rows"></tbody>
         </table></div>
       </section>
@@ -74,6 +81,11 @@
         <p class="caption" id="unitCaption"></p>
         <img id="unitImg" alt="Raster and PSTH of the selected unit">
         <p class="err" id="unitErr"></p>
+        <div id="tuningBox" hidden>
+          <p class="caption" id="tuningCaption"></p>
+          <img id="tuningImg" alt="Tuning curve of the selected unit">
+          <p class="err" id="tuningErr"></p>
+        </div>
       </section>
 
       <section class="card area-pop">

@@ -40,3 +40,19 @@ def available_events(trials: pd.DataFrame) -> dict[str, str]:
         for name, (label, column, outcome) in EVENTS.items()
         if column in trials and (outcome is None or "feedbackType" in trials)
     }
+
+
+def trial_event_times(trials: pd.DataFrame, event: str) -> np.ndarray:
+    """(n_trials,) seconds, one per trial row: NaN where the trial has no such event,
+    including feedback of the other outcome. For splitting trials by condition."""
+    if event not in EVENTS:
+        raise ValueError(f"unknown event {event!r}; available: {sorted(EVENTS)}")
+    _, column, outcome = EVENTS[event]
+    if column not in trials:
+        raise ValueError(f"trials have no {column} column, needed for {event}")
+    times = trials[column].to_numpy(np.float64).copy()
+    if outcome is not None:
+        if "feedbackType" not in trials:
+            raise ValueError(f"trials have no feedbackType column, needed for {event}")
+        times[trials["feedbackType"].to_numpy(np.float64) != outcome] = np.nan
+    return times

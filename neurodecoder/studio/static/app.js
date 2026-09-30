@@ -5,7 +5,7 @@ import { OrbitControls } from '/static/vendor/three/OrbitControls.js';
 import { OBJLoader } from '/static/vendor/three/OBJLoader.js';
 
 const $ = (id) => document.getElementById(id);
-const state = { session: null, level: null, node: '', all: false, responsive: false, probe: '', unit: null, rows: [], tree: [], popRows: null, box: null };
+const state = { session: null, level: null, node: '', all: false, responsive: false, probe: '', split: '', unit: null, rows: [], tree: [], popRows: null, box: null };
 
 // ---------- helpers ----------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -22,7 +22,7 @@ function params(extra = {}) {
   const p = new URLSearchParams({
     event: $('event').value, t0: $('t0').value, t1: $('t1').value, bin: $('bin').value,
     baseline: $('baseline').checked ? 1 : 0, b0: $('b0').value, b1: $('b1').value,
-    all: state.all ? 1 : 0, node: state.node, probe: state.probe, responsive: state.responsive ? 1 : 0, theme: theme(), ...extra,
+    all: state.all ? 1 : 0, node: state.node, probe: state.probe, split: state.split, responsive: state.responsive ? 1 : 0, theme: theme(), ...extra,
   });
   if (state.level) p.set('level', state.level);
   return p;
@@ -60,6 +60,7 @@ async function init() {
   $('source').title = s.eid;
   $('counts').textContent = `${s.n_units_passing} of ${s.n_units_total} units pass QC · ${s.n_trials} trials`;
   for (const [k, v] of Object.entries(s.events)) $('event').add(new Option(v, k));
+  for (const [k, v] of Object.entries(s.conditions)) $('split').add(new Option(v, k));
   const noRegion = s.missing['units.acronym'];
   // Start from the project's saved view: settings only; every number is recomputed.
   const v = s.project.view;
@@ -70,6 +71,8 @@ async function init() {
   state.node = v.node || '';
   state.unit = v.unit;
   state.probe = s.probes.includes(v.probe) ? v.probe : '';
+  state.split = s.conditions[v.split] ? v.split : '';
+  $('split').value = state.split;
   renderProbes();
   state.level = noRegion ? null : (s.levels.includes(v.level) ? v.level : s.default_level);
   $('projectStatus').textContent = s.project.path ? `Project: ${s.project.path.split('/').pop()}` : '';
@@ -106,7 +109,7 @@ function currentView() {
     event: $('event').value, t0: +$('t0').value, t1: +$('t1').value, bin: +$('bin').value,
     baseline: $('baseline').checked, b0: +$('b0').value, b1: +$('b1').value,
     level: state.level || state.session.default_level, node: state.node,
-    all: state.all, responsive: state.responsive, unit: state.unit, probe: state.probe,
+    all: state.all, responsive: state.responsive, unit: state.unit, probe: state.probe, split: state.split,
   };
 }
 async function post(url, body) {
@@ -127,6 +130,7 @@ async function loadUnits() {
   state.rows = d.units;
   state.tree = d.tree;
   renderTest(d.test);
+  renderSelectivity(d.selectivity);
   if (!state.rows.some((u) => u.id === state.unit)) state.unit = state.rows.length ? state.rows[0].id : null;
   renderTree();
   renderTable();
@@ -180,6 +184,41 @@ async function runTest() {
 // A test belongs to one event and one unit set; changing either drops the filter.
 function resetResponsive() { state.responsive = false; $('responsive').checked = false; }
 
+// ---------- rail: selectivity ----------
+function renderSelectivity(t) {
+  const s = state.session, pair = s.comparisons[state.split];
+  $('runSel').disabled = !pair;
+  if (!state.split) {
+    $('selWhat').textContent = 'Choose a condition to split by.';
+  } else if (!pair) {
+    $('selWhat').textContent = `${s.conditions[state.split]} has many levels: read its tuning curve. No two-condition test.`;
+  } else {
+    $('selWhat').textContent = `AUROC ${pair[1]} vs ${pair[0]} per unit: above 0.5, a higher rate for ${pair[1]}. ` +
+      `Tested against a null, Benjamini–Hochberg across the units tested, α = ${s.response.alpha}.`;
+  }
+  if (!t) {
+    $('selSummary').textContent = pair ? 'Not run for this event and split.' : '';
+    return;
+  }
+  const on = t.probes.length === 1 ? `probe ${t.probes[0]}` : `probes ${t.probes.join(', ')}`;
+  $('selSummary').textContent = `${t.n_selective} of ${t.n_tests} units on ${on} selective ` +
+    `(${t.n_higher_b} higher for ${t.b}, ${t.n_higher_a} for ${t.a}) · ${t.n_a} vs ${t.n_b} trials · ` +
+    `null: ${t.null}, ${t.n_null.toLocaleString()} draws, seed ${t.seed} · ${t.window} window`;
+}
+async function runSelectivity() {
+  const button = $('runSel');
+  button.disabled = true;
+  $('selSummary').textContent = 'Testing…';
+  try {
+    await getJSON('/api/selectivity?' + params({ responsive: 0 }));
+    await loadUnits();
+  } catch (e) {
+    $('selSummary').textContent = e.message;
+  } finally {
+    button.disabled = !state.session.comparisons[state.split];
+  }
+}
+
 // ---------- rail: region tree ----------
 function renderTree() {
   const el = $('tree');
@@ -212,11 +251,16 @@ function renderTable() {
       return `<tr data-id="${esc(u.id)}" aria-selected="${u.id === state.unit}"><td>${esc(u.id)}</td><td>${region}</td>` +
         `<td class="num">${fmt(u.depth_um, 0)}</td><td class="num">${fmt(u.firing_rate_hz, 2)}</td><td>${fmt(u.label, 2)}</td>` +
         `<td class="${u.qc_passed ? '' : 'fail'}" title="${esc(u.qc_reason)}">${u.qc_passed ? 'pass' : 'fail'}</td>` +
-        `<td class="resp" title="${respTitle(u)}">${{ up: '↑', down: '↓', no: '·' }[u.resp] || fmt(null)}</td></tr>`;
+        `<td class="resp" title="${respTitle(u)}">${{ up: '↑', down: '↓', no: '·' }[u.resp] || fmt(null)}</td>` +
+        `<td class="num" title="${selTitle(u)}">${u.sel_auroc == null ? fmt(null) : u.sel_auroc.toFixed(2) + (u.sel ? '*' : '')}</td></tr>`;
     })
     .join('');
 }
 
+function selTitle(u) {
+  if (u.sel_auroc == null) return 'Not tested';
+  return `AUROC ${u.sel_auroc.toFixed(3)}, p = ${u.sel_p.toPrecision(2)}, q = ${u.sel_q.toPrecision(2)}`;
+}
 function respTitle(u) {
   if (!u.resp) return 'Not tested';
   return `Δ = ${u.resp_hz.toFixed(2)} Hz, p = ${u.resp_p.toPrecision(2)}, q = ${u.resp_q.toPrecision(2)}`;
@@ -232,7 +276,7 @@ function selectUnit(id, { scroll = true } = {}) {
 }
 
 // ---------- plots (PNGs from viz/) ----------
-const latest = { unit: 0, pop: 0 };
+const latest = { unit: 0, pop: 0, tuning: 0 };
 async function fetchPlot(kind, url, img, caption, err) {
   const seq = ++latest[kind];
   const r = await fetch(url);
@@ -250,6 +294,13 @@ async function fetchPlot(kind, url, img, caption, err) {
 }
 function plotUnit() {
   if (state.unit) fetchPlot('unit', '/api/unit.png?' + params({ unit: state.unit }), $('unitImg'), $('unitCaption'), $('unitErr'));
+  plotTuning();
+}
+function plotTuning() {
+  $('tuningBox').hidden = !state.split || !state.unit;
+  if (!$('tuningBox').hidden) {
+    fetchPlot('tuning', '/api/tuning.png?' + params({ unit: state.unit }), $('tuningImg'), $('tuningCaption'), $('tuningErr'));
+  }
 }
 async function plotPop() {
   const h = await fetchPlot('pop', '/api/population.png?' + params(), $('popImg'), $('popCaption'), $('popErr'));
@@ -448,6 +499,8 @@ $('level').addEventListener('click', (e) => {
 });
 $('all').addEventListener('change', () => { state.all = $('all').checked; resetResponsive(); loadUnits(); loadGeometry(); });
 $('runTest').addEventListener('click', runTest);
+$('runSel').addEventListener('click', runSelectivity);
+$('split').addEventListener('change', () => { state.split = $('split').value; loadUnits(); });
 $('probeFilter').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b || b.dataset.v === state.probe) return;

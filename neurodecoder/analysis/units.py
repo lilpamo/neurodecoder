@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from neurodecoder.data.session import Session
-from neurodecoder.qc.phy import PhyUnitQC, phy_unit_qc
+from neurodecoder.qc.phy import REFRACTORY, PhyUnitQC, phy_unit_qc, refractory_passes
 from neurodecoder.qc.units import TASK_RATE, UnitQC, task_firing_rates, unit_qc
 
 
@@ -18,6 +18,7 @@ def unit_table(session: Session, qc: UnitQC | PhyUnitQC) -> pd.DataFrame:
     """
     units = session.units.assign(**{TASK_RATE: task_firing_rates(session)})
     if isinstance(qc, PhyUnitQC):
+        units = units.assign(**{REFRACTORY: refractory_passes(session, qc)})
         verdict, label = phy_unit_qc(units, qc), units["phy_group"]
     else:
         verdict, label = unit_qc(units, qc), units["label"]
