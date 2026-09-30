@@ -215,6 +215,7 @@ def test_split_tuning_and_selectivity_on_real_data(tmp_path):
         "choice",
         "outcome",
         "block",
+        "reaction_time",
     }
     groups = studio.unit_data(q)["groups"]
     assert [g.name for g in groups] == ["right (-1)", "left (+1)"]
@@ -231,3 +232,60 @@ def test_split_tuning_and_selectivity_on_real_data(tmp_path):
     out = export_view(studio, view, tmp_path / "runs")
     names = {p.name for p in out.iterdir()}
     assert {"tuning.svg", "tuning.json", "selectivity.csv"} <= names
+
+
+def test_phy_sessions_say_why_there_are_no_movement_controls(tmp_path):
+    studio = _studio(tmp_path)  # events: intervals and stimOn only; Phy has no wheel
+    movement = studio.session_json({})["movement"]
+    assert movement["wheel"] is False and movement["first_movement"] is False
+    assert movement["wheel_missing"] == "Phy import reads spikes and events only"
+    with pytest.raises(ValueError, match="No wheel: Phy import reads spikes and events only"):
+        studio.wheel_png(PLOT)
+    with pytest.raises(ValueError, match="firstMovement_times"):
+        studio.locking_json({"all": "1"})
+    studio.response_cfg = ResponseConfig((-0.2, 0.0), (0.0, 0.3), 0.001, 0.5, 0.05)
+    with pytest.raises(ValueError, match="firstMovement_times"):
+        studio.test_json({"event": "stim_on", "all": "1", "movement_free": "1"})
+
+
+def test_movement_controls_on_real_data(tmp_path):
+    import json
+
+    from neurodecoder.analysis.movement import MovementConfig
+    from neurodecoder.data.load import load_data_config, load_session
+    from neurodecoder.qc.units import load_qc_config
+    from neurodecoder.studio.export import export_view
+    from neurodecoder.studio.project import DEFAULT_VIEW, Source
+
+    eid = "d23a44ef-1402-4ed7-97f5-47e9a7a504d9"
+    try:
+        session = load_session(eid, "bwm")
+    except (OSError, ValueError) as e:
+        pytest.skip(f"d23a44ef not available: {e}")
+    source = Source(kind="ibl", eid=eid, backend="bwm")
+    studio = Studio(session, load_qc_config(), load_data_config().data_root / "atlas", source)
+    studio.movement_cfg = MovementConfig((-0.2, 0.0), (0.0, 0.2), 200, 0)  # fewer, for speed
+    q = {"event": "stim_on", "t0": "-0.5", "t1": "1.0", "bin": "0.02", "theme": "light"}
+    assert studio.session_json({})["movement"]["wheel"] is True
+    png, headers = studio.wheel_png(q)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert unquote(headers["X-Caption"]).startswith("Wheel speed · Stimulus onset · n = 410 trials")
+    # Movement-free responsiveness is a separate result from the all-trials one.
+    free = studio.test_json({**q, "probe": "probe01", "movement_free": "1"})
+    assert free["movement_free"] is True and free["n_trials"] == 87
+    with pytest.raises(ValueError, match="run the responsiveness test"):
+        studio.units_json({**q, "probe": "probe01", "responsive": "1"})
+    with pytest.raises(ValueError, match="stimulus onset only"):
+        studio.test_json({**q, "event": "feedback", "movement_free": "1"})
+    locking = studio.locking_json({**q, "probe": "probe01"})
+    assert locking["n_trials"] == 410 and locking["n_null"] == 200
+    assert locking["null"] == "reaction times permuted within signed contrast"
+    rows = studio.units_json({**q, "probe": "probe01"})["units"]
+    assert len(rows) == locking["n_tests"]
+    assert sum(r["locked"] for r in rows) == locking["n_locked"]
+    view = {**DEFAULT_VIEW, "probe": "probe01", "movement_free": True, "unit": rows[0]["id"]}
+    out = export_view(studio, view, tmp_path / "runs")
+    names = {p.name for p in out.iterdir()}
+    assert {"wheel.svg", "wheel.json", "movement_locking.csv", "responsiveness.csv"} <= names
+    assert json.loads((out / "wheel.json").read_text())["unit"] == "rad/s"
+    assert pd.read_csv(out / "responsiveness.csv")["n_trials"].iloc[0] == 87

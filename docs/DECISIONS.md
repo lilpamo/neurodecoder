@@ -6,6 +6,89 @@ first.
 
 ---
 
+### 2026-09-30 — Movement controls (`analysis/movement.py`, `configs/movement.yaml`)
+
+**What (the user's step 6):**
+- **Wheel speed:** |d position / dt| (rad/s) from `behaviour.wheel`, mean ± SEM per
+  bin on the unit PSTH's event, window, bins and trials, drawn under it on the same
+  time axis.
+- **Reaction time split:** "Reaction time" in Split by, early vs late at the
+  median (first movement - stimulus onset). Trials without a first movement are
+  excluded and counted.
+- **Movement-free test:** a checkbox in Responsiveness runs step 3's shift test on
+  the trials whose first movement comes after the response window's end (300 ms).
+  It is kept apart from the all-trials result, and the summary names the trials.
+- **"Movement-locked" label:** a Movement section runs it; the table's "Mov."
+  column shows ↑, ↓ or · per unit.
+
+**The locking statistic and null:**
+- **Statistic:** the mean over trials of (rate 0–200 ms after minus rate 200–0 ms
+  before) each trial's own first movement.
+- **Null:** the same with reaction times permuted within signed-contrast strata,
+  0% split by side (step 5's strata). Each trial keeps its stimulus, and gets a
+  reaction time from its own contrast.
+- **Why it separates the two:** a stimulus-locked unit blurs the same way under
+  true and permuted reaction times, so it isn't labelled; a movement-locked unit
+  is sharper at its true movement times.
+- **Settings:** two-sided, p = (1 + #|null| ≥ |observed|) / (1 + n), 10,000
+  permutations, seed 0, windows in `configs/movement.yaml`. BH across the units
+  tested, at step 3's α.
+
+**Choices beyond the plan, flagged for review:**
+1. **The movement-free box applies to the test only.** The plots keep every
+   trial, and the box says so. It is defined at stimulus onset only.
+2. **Locking needs the contrast columns** as well as `firstMovement_times`, for
+   the strata.
+3. **Projects now hash `configs/selectivity.yaml` and `configs/movement.yaml`.**
+   Step 5 left the selectivity config out. Files saved before this say "was not
+   recorded when the project was saved" instead of failing to open.
+4. **Exports** add `wheel.svg/.pdf/.json` when the session has a wheel, and
+   `movement_locking.csv` when the test was run.
+
+**Checks (test-only Poisson spike trains, never shown as data):**
+- **By hand:** reaction times, movement-free trials (the boundary and missing
+  movements), and a wheel-speed PSTH.
+- **Simulation:** units that fire only after movement are responsive at stimulus
+  onset over all trials (> 90%) and not on movement-free trials (< 20%). A
+  movement-locked unit gets p < 0.01; a stimulus-locked one p > 0.05.
+- **Calibration:** on 150 stimulus-locked units, locking p-values are uniform (KS
+  p = 0.2), with 0 labelled.
+- **A test design bug found:** trials evenly spaced with background spikes only
+  around trials made the shift null in the movement-free test wrong. The tests use
+  irregular spacing and background over the whole session, like real data.
+
+**Real data (d23a44ef, 390 QC-passing units, stimulus onset):**
+
+| Trials | Movement-free trials | Responsive on them | Movement-locked |
+|---|---|---|---|
+| all | 87 of 410 | 153 | 235 (on 410 trials, 28 s) |
+| BWM inclusion (default) | 25 of 290 | 117 | 110 (on 290 trials, 14 s) |
+
+Over all trials, step 3 found 320 of 390 units responsive.
+
+**Flagged: movement-free trials are few, and not a random subset.**
+- Under the default filter only 25 trials remain, so the test has little power.
+  153 or 117 responsive units is not "how many respond to the stimulus without
+  movement": fewer trials find fewer units.
+- 62 of the 87 all-trial movement-free trials have reaction times over 2 s, which
+  BWM inclusion drops as disengaged.
+- They over-represent low contrast: only 5 of the 92 100%-contrast trials qualify.
+  A unit that loses its response on them may be contrast-driven.
+- The 300 ms window is the user's call. A shorter response window keeps more
+  trials.
+
+**Limitations:**
+- Within a contrast, trials are treated as exchangeable. If reaction time tracks
+  the unit's state (engagement, say) for other reasons, the locking label can
+  over-call.
+- The labels are not exclusive: a unit can be both stimulus-responsive and
+  movement-locked.
+- Phy folders have no wheel, so the panel says why. Their events CSV enables the
+  movement-free test and locking when it has `firstMovement_times` and contrasts,
+  as the d23a44ef export does (67 of 161 units locked, all trials).
+
+**No new dependency.**
+
 ### 2026-09-30 — Homepage and data selection, part (b) (`analysis/catalog.py`, `studio/sets.py`, `studio/entry.py`)
 
 **3D overview:**

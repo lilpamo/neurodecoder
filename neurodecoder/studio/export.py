@@ -3,7 +3,11 @@
 Each export is a new `runs/<run_id>/` folder (run_id = UTC time + "_studio"):
 - `unit.svg`, `unit.pdf`, `unit.json`: the selected unit's raster and PSTH;
 - `population.svg`, `population.pdf`, `population.json`: the heatmap and mean;
-- `responsiveness.csv`, when the test was run for this event;
+- `wheel.svg`, `wheel.pdf`, `wheel.json`: wheel speed on the same trials, when the
+  session has a wheel;
+- `responsiveness.csv`, when the test was run for this event (on all trials or on
+  movement-free trials only, as the view says);
+- `selectivity.csv` and `movement_locking.csv`, when those tests were run;
 - `manifest.json`: git SHA and dirty flag, the project snapshot (source, file
   hashes, data fingerprint, config hashes), the view and the software versions.
 
@@ -30,6 +34,7 @@ from neurodecoder.viz.studio_plots import (
     build_population_figure,
     build_tuning_figure,
     build_unit_figure,
+    build_wheel_figure,
     condition_colours,
     probe_colours,
     save_vector,
@@ -158,6 +163,27 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
     _write_json(out / "population.json", {**d, "trials": studio._trial_summary(q)})
     files += ["population.svg", "population.pdf", "population.json"]
 
+    if "wheel" in studio.session.behaviour:
+        w = studio.wheel_data(q)
+        p = w["psth"]
+        fig = build_wheel_figure(p, w["window"], THEME, w["caption"])
+        for suffix in ("svg", "pdf"):
+            save_vector(fig, out / f"wheel.{suffix}")
+        _write_json(
+            out / "wheel.json",
+            {
+                "caption": w["caption"],
+                "trials": studio._trial_summary(q),
+                "unit": "rad/s",
+                "bin_centers_s": p.bin_centers.tolist(),
+                "mean": p.mean.tolist(),
+                "sem": p.sem.tolist(),
+                "n_trials": p.n_trials,
+                "n_excluded": p.n_excluded,
+            },
+        )
+        files += ["wheel.svg", "wheel.pdf", "wheel.json"]
+
     tested = studio._tested(q)
     if tested is not None:
         tested.to_csv(out / "responsiveness.csv")
@@ -166,6 +192,10 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
     if chosen is not None:
         chosen.to_csv(out / "selectivity.csv")
         files.append("selectivity.csv")
+    locking = studio._locking.get(studio._locking_key(q))
+    if locking is not None:
+        locking.to_csv(out / "movement_locking.csv")
+        files.append("movement_locking.csv")
 
     manifest = {
         "run_id": run_id,
@@ -177,6 +207,7 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
         "view": view,
         "responsiveness": None if tested is None else asdict(studio.response_cfg),
         "selectivity": None if chosen is None else asdict(studio.selectivity_cfg),
+        "movement": None if locking is None else asdict(studio.movement_cfg),
         "files": files,
         "versions": {
             "python": platform.python_version(),

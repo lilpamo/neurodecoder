@@ -52,6 +52,12 @@ from neurodecoder.analysis.conditions import (
     split_event_times,
 )
 from neurodecoder.analysis.events import EVENTS, available_events, event_times
+from neurodecoder.analysis.movement import (
+    load_movement_config,
+    movement_free,
+    movement_locking,
+    wheel_speed_psth,
+)
 from neurodecoder.analysis.psth import (
     alternate_halves,
     bin_edges,
@@ -100,6 +106,7 @@ from neurodecoder.viz.studio_plots import (
     probe_colours,
     tuning_figure,
     unit_figure,
+    wheel_figure,
 )
 
 HERE = Path(__file__).parent
@@ -140,15 +147,22 @@ class Studio:
         self.has_positions = all(f"units.{a}" in session.available.present for a in "xyz")
         self.response_cfg = load_response_config()
         self.selectivity_cfg = load_selectivity_config()
+        self.movement_cfg = load_movement_config()
+        # (all units, probe, trial filter) -> movement-locking result: BH over that set.
+        self._locking: dict[tuple, pd.DataFrame] = {}
         # (event, condition, all units, probe, trial filter) -> result: BH over that set.
         self._selectivity: dict[tuple, pd.DataFrame] = {}
         self.probes = sorted(self.units["probe"].unique())
         # (event, all units, probe, trial filter) -> result: BH ran over exactly that set.
         self._tests: dict[tuple, pd.DataFrame] = {}
 
-    def _test_key(self, q: dict) -> tuple[str, bool, str, str]:
+    def _test_key(self, q: dict) -> tuple:
         """A result belongs to one event, unit set, probe and trial filter."""
         return q.get("event", ""), q.get("all") == "1", q.get("probe", ""), self._filter(q).key()
+
+    def _response_key(self, q: dict) -> tuple:
+        """Responsiveness also depends on whether only movement-free trials were used."""
+        return (*self._test_key(q), q.get("movement_free") == "1")
 
     def _filter(self, q: dict) -> TrialFilter:
         """The request's trial filter; no `tf` means every trial."""
@@ -167,7 +181,7 @@ class Studio:
         return f" · trial filters kept {sel.n_kept} of {sel.n_total} ({why})"
 
     def _tested(self, q: dict) -> pd.DataFrame | None:
-        return self._tests.get(self._test_key(q))
+        return self._tests.get(self._response_key(q))
 
     def _level(self, q: dict) -> str:
         level = q.get("level", DEFAULT_LEVEL)
@@ -226,6 +240,15 @@ class Studio:
             "selectivity": dict(self.selectivity_cfg.__dict__),
             "trial_filters": available_trial_filters(self.session.trials),
             "trial_levels": self._trial_levels(),
+            "movement": {
+                "wheel": "wheel" in self.session.behaviour,
+                "wheel_missing": self.session.available.missing.get("behaviour.wheel", ""),
+                "first_movement": "firstMovement_times" in self.session.trials,
+                "windows": [
+                    list(self.movement_cfg.pre_window),
+                    list(self.movement_cfg.post_window),
+                ],
+            },
             "project": {
                 "path": None if self.project_path is None else str(self.project_path),
                 "view": self.view,
@@ -259,18 +282,24 @@ class Studio:
 
     def test_json(self, q: dict) -> dict:
         """Run (or reuse) the responsiveness test on every shown unit for one event."""
-        key = self._test_key(q)
+        key = self._response_key(q)
         if key not in self._tests:
             ids = self._select({"all": q.get("all", "0"), "probe": q.get("probe", "")})
             if not ids:
                 raise ValueError("no units to test")
-            events = event_times(self._trials(q)[0], q["event"])
+            trials = self._trials(q)[0]
+            if q.get("movement_free") == "1":
+                if q["event"] != "stim_on":
+                    raise ValueError("movement-free trials are defined for stimulus onset only")
+                trials = trials[movement_free(trials, self.response_cfg.response_window[1])]
+            events = event_times(trials, q["event"])
             self._tests[key] = responsiveness(self.session.spikes, ids, events, self.response_cfg)
-        return self._summary(self._tests[key])
+        return self._summary(self._tests[key], key[-1])
 
-    def _summary(self, t: pd.DataFrame) -> dict:
+    def _summary(self, t: pd.DataFrame, movement_free_only: bool = False) -> dict:
         up = t["responsive"] & (t["statistic_hz"] > 0)
         return {
+            "movement_free": movement_free_only,
             "n_tests": int(t["n_tests"].iloc[0]),
             "n_responsive": int(t["responsive"].sum()),
             "n_up": int(up.sum()),
@@ -303,6 +332,12 @@ class Studio:
             rows = rows.assign(
                 resp_q=t["q"], resp_p=t["p"], resp_hz=t["statistic_hz"], resp=verdict
             )
+        locking = self._locking.get(self._locking_key(q))
+        if locking is not None:
+            t = locking.reindex(rows.index)
+            rows = rows.assign(
+                lock_hz=t["statistic_hz"], lock_p=t["p"], lock_q=t["q"], locked=t["locked"]
+            )
         chosen = self._selectivity.get(self._selectivity_key(q))
         if chosen is not None:
             t = chosen.reindex(rows.index)
@@ -311,10 +346,62 @@ class Studio:
             "level": self._level(q) if self.has_regions else None,
             "units": _records(rows.reset_index().rename(columns={"unit_id": "id"})),
             "tree": tree,
-            "test": None if tested is None else self._summary(tested),
+            "test": (
+                None if tested is None else self._summary(tested, q.get("movement_free") == "1")
+            ),
             "selectivity": None if chosen is None else self._selectivity_summary(chosen, q),
             "trials": self._trial_summary(q),
+            "locking": None if locking is None else self._locking_summary(locking),
         }
+
+    def _locking_key(self, q: dict) -> tuple:
+        """Locking is to each trial's own first movement: no event in the key."""
+        return q.get("all") == "1", q.get("probe", ""), self._filter(q).key()
+
+    def locking_json(self, q: dict) -> dict:
+        """Run (or reuse) the movement-locking test on every shown unit."""
+        key = self._locking_key(q)
+        if key not in self._locking:
+            ids = self._select({"all": q.get("all", "0"), "probe": q.get("probe", "")})
+            if not ids:
+                raise ValueError("no units to test")
+            trials = self._trials(q)[0]
+            self._locking[key] = movement_locking(
+                self.session.spikes, ids, trials, self.movement_cfg, self.response_cfg.alpha
+            )
+        return self._locking_summary(self._locking[key])
+
+    def _locking_summary(self, t: pd.DataFrame) -> dict:
+        return {
+            "n_tests": int(t["n_tests"].iloc[0]),
+            "n_locked": int(t["locked"].sum()),
+            "n_trials": int(t["n_trials"].iloc[0]),
+            "n_null": int(t["n_null"].iloc[0]),
+            "null": t["null"].iloc[0],
+            "seed": int(t["seed"].iloc[0]),
+            "windows": [list(self.movement_cfg.pre_window), list(self.movement_cfg.post_window)],
+            "probes": sorted(self.units.loc[t.index, "probe"].unique()),
+        }
+
+    def wheel_png(self, q: dict) -> tuple[bytes, dict]:
+        """Wheel speed around the event, on the same trials and bins as the PSTH."""
+        d = self.wheel_data(q)
+        png = wheel_figure(d["psth"], d["window"], q.get("theme", "light"))
+        return png, {"X-Caption": quote(d["caption"])}
+
+    def wheel_data(self, q: dict) -> dict:
+        """Wheel speed PSTH (rad/s) on the page's event, window, bins and trials."""
+        if "wheel" not in self.session.behaviour:
+            why = self.session.available.missing.get("behaviour.wheel", "no wheel in this session")
+            raise ValueError(f"No wheel: {why}")
+        window, bin_width, _, events = self._params(q)
+        p = wheel_speed_psth(self.session.behaviour["wheel"], events, window, bin_width)
+        caption = (
+            f"Wheel speed · {EVENTS[q['event']][0]} · n = {p.n_trials} trials"
+            + (f", {p.n_excluded} without this event excluded" if p.n_excluded else "")
+            + self._trial_note(self._trials(q)[1])
+        )
+        return {"psth": p, "window": window, "caption": caption}
 
     def _trial_summary(self, q: dict) -> dict:
         _, sel = self._trials(q)
@@ -764,6 +851,8 @@ _SESSION_ROUTES = {
     "/api/geometry": ("application/json", "geometry_json"),
     "/api/test": ("application/json", "test_json"),
     "/api/selectivity": ("application/json", "selectivity_json"),
+    "/api/locking": ("application/json", "locking_json"),
+    "/api/wheel.png": ("image/png", "wheel_png"),
     "/api/tuning.png": ("image/png", "tuning_png"),
     "/api/unit.png": ("image/png", "unit_png"),
     "/api/population.png": ("image/png", "population_png"),

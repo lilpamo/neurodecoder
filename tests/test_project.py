@@ -125,3 +125,15 @@ def test_trial_filters_round_trip_through_a_project(tmp_path):
     save_project(make_project(source, session, qc, view), path)
     project, _, _, warnings = open_project(path)
     assert warnings == [] and project["view"]["trials"] == {"outcomes": [1.0], "exclude_nogo": True}
+
+
+def test_every_config_behind_a_labelled_result_is_hashed(tmp_path):
+    _, _, path = _saved(tmp_path)
+    saved = json.loads(path.read_text())
+    assert set(saved["configs"]) == {"qc", "analysis", "selectivity", "movement"}
+    assert saved["configs"]["movement"]["path"] == "configs/movement.yaml"
+    # Files saved before a config was recorded say so, rather than failing to open.
+    del saved["configs"]["movement"]
+    path.write_text(json.dumps(saved))
+    _, _, _, warnings = open_project(path)
+    assert warnings == ["configs/movement.yaml was not recorded when the project was saved"]

@@ -11,6 +11,8 @@ IBL's conventions, checked on d23a44ef (docs/DECISIONS.md):
   "right (-1)" and "left (+1)".
 - **Outcome:** feedbackType, -1 error, +1 reward.
 - **Block:** probabilityLeft, 0.2 / 0.5 / 0.8 (0.5 is the unbiased opening block).
+- **Reaction time:** first movement - stimulus onset, split at this table's median
+  into early and late. Trials without a first movement are excluded and counted.
 
 Only conditions whose columns the table has are offered, so Phy sessions get what
 their events CSV provides.
@@ -31,6 +33,7 @@ CONDITIONS = {
     "choice": ("Choice", ("choice",)),
     "outcome": ("Outcome", ("feedbackType",)),
     "block": ("Block", ("probabilityLeft",)),
+    "reaction_time": ("Reaction time", ("stimOn_times", "firstMovement_times")),
 }
 _NAMES = {
     "side": {-1.0: "left", 1.0: "right"},
@@ -130,6 +133,13 @@ def condition(trials: pd.DataFrame, name: str) -> Condition:
     elif name == "outcome":
         values = trials["feedbackType"].to_numpy(np.float64).copy()
         excluded = "trials without feedback"
+    elif name == "reaction_time":
+        rt = trials["firstMovement_times"].to_numpy(np.float64) - trials["stimOn_times"].to_numpy(
+            np.float64
+        )
+        median = float(np.nanmedian(rt)) if np.isfinite(rt).any() else np.nan
+        values = np.where(np.isfinite(rt), (rt >= median).astype(np.float64), np.nan)
+        excluded = "trials without a first movement"
     else:
         values = trials["probabilityLeft"].to_numpy(np.float64).copy()
         excluded = "trials without a block"
@@ -138,6 +148,9 @@ def condition(trials: pd.DataFrame, name: str) -> Condition:
         names = tuple(_percent(v) for v in levels)
     elif name == "block":
         names = tuple(f"p(left) {v:g}" for v in levels)
+    elif name == "reaction_time":
+        ms = f"{median * 1000:.0f} ms"
+        names = tuple(f"early (< {ms})" if v == 0 else f"late (≥ {ms})" for v in levels)
     else:
         names = tuple(_NAMES[name].get(v, f"{v:g}") for v in levels)
     n_excluded = int(np.isnan(values).sum())

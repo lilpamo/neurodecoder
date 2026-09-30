@@ -257,6 +257,32 @@ def build_tuning_figure(
     return fig
 
 
+def build_wheel_figure(p: PSTH, window, theme: str, title=None) -> Figure:
+    """Wheel speed mean ± SEM around the event, on the unit PSTH's time axis (same
+    left edge and width, so the two line up on the page)."""
+    t = _theme(theme)
+    fig = Figure(figsize=(5.6, 1.6))
+    add, _ = _frame(fig, title, t["ink2"])
+    ax = add((0.13, 0.3, 0.84, 0.62))
+    ax.fill_between(
+        p.bin_centers, p.mean - p.sem, p.mean + p.sem, color=t["ink2"], alpha=0.18, lw=0
+    )
+    ax.plot(p.bin_centers, p.mean, color=t["ink2"], lw=1.6)
+    ax.set_xlim(*window)
+    ax.set_ylabel("wheel (rad/s)")
+    ax.set_xlabel("time from event (s)")
+    ax.grid(axis="y", color=t["grid"], lw=0.6)
+    ax.set_axisbelow(True)
+    _style(ax, t)
+    ax.axvline(0, color=t["muted"], lw=1, ls=(0, (3, 3)))
+    return fig
+
+
+def wheel_figure(p: PSTH, window, theme: str) -> bytes:
+    """build_wheel_figure as a PNG for the page."""
+    return _png(build_wheel_figure(p, window, theme))
+
+
 def tuning_figure(names, means, sems, ns, colours, ordinal: bool, theme: str) -> bytes:
     return _png(build_tuning_figure(names, means, sems, ns, colours, ordinal, theme))
 

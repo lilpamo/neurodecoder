@@ -42,6 +42,8 @@
     <section>
       <h2>Responsiveness</h2>
       <p class="note" id="testWindows"></p>
+      <label class="check" id="freeBox"><input type="checkbox" id="movementFree"> Movement-free trials only</label>
+      <p class="note" id="freeNote"></p>
       <button class="btn" id="runTest">Test shown units</button>
       <p class="note" id="testSummary"></p>
       <label class="check"><input type="checkbox" id="responsive" disabled> Responsive only</label>
@@ -51,6 +53,12 @@
       <p class="note" id="selWhat">Choose a condition to split by.</p>
       <button class="btn" id="runSel" disabled>Test selectivity</button>
       <p class="note" id="selSummary"></p>
+    </section>
+    <section>
+      <h2>Movement</h2>
+      <p class="note" id="lockWhat"></p>
+      <button class="btn" id="runLock">Test movement locking</button>
+      <p class="note" id="lockSummary"></p>
     </section>
     <section>
       <h2>Region level</h2>
@@ -77,7 +85,7 @@
       <section class="card area-table">
         <header><h3>Units</h3><span class="meta" id="tableMeta"></span></header>
         <div class="table"><table>
-          <thead><tr><th>Unit</th><th>Region</th><th class="num">Depth µm</th><th class="num">Rate Hz</th><th>Label</th><th>QC</th><th title="Responsive to this event (q &lt; alpha)">Resp.</th><th class="num" title="Selectivity: AUROC between the split's two conditions; * when q &lt; alpha">Sel.</th></tr></thead>
+          <thead><tr><th>Unit</th><th>Region</th><th class="num">Depth µm</th><th class="num">Rate Hz</th><th>Label</th><th>QC</th><th title="Responsive to this event (q &lt; alpha)">Resp.</th><th class="num" title="Selectivity: AUROC between the split's two conditions; * when q &lt; alpha">Sel.</th><th title="Locked to the trial's first movement (q &lt; alpha): rate up or down after it">Mov.</th></tr></thead>
           <tbody id="rows"></tbody>
         </table></div>
       </section>
@@ -87,6 +95,11 @@
         <p class="caption" id="unitCaption"></p>
         <img id="unitImg" alt="Raster and PSTH of the selected unit">
         <p class="err" id="unitErr"></p>
+        <div id="wheelBox">
+          <p class="caption" id="wheelCaption"></p>
+          <img id="wheelImg" alt="Wheel speed around the event, on the same trials">
+          <p class="err" id="wheelErr"></p>
+        </div>
         <div id="tuningBox" hidden>
           <p class="caption" id="tuningCaption"></p>
           <img id="tuningImg" alt="Tuning curve of the selected unit">

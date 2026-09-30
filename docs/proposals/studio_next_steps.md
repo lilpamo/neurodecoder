@@ -325,7 +325,20 @@ selectivity").
   - a plain shuffle doesn't. This is the test that justifies the null.
 - The pseudo-session null reused unchanged.
 
-## 6. Movement controls
+## 6. Movement controls — built (2026-09-30)
+
+Built (`docs/DECISIONS.md`, "Movement controls").
+- **As planned:** the wheel-speed panel, the early/late reaction-time split, the
+  movement-free test and the "movement-locked" label, with reaction times
+  permuted within contrast.
+- **Strata:** signed contrast, with 0% split by side (step 5's strata).
+- **Statistic:** rate 0–200 ms after minus 200–0 ms before each trial's first
+  movement, averaged over trials.
+- **Movement-free:** applies to the test only, at stimulus onset. The plots keep
+  every trial.
+- **Phy:** locking also needs `contrastLeft`/`contrastRight` in the events CSV.
+- **Flagged:** under the default trial filter, only 25 of 290 d23a44ef trials are
+  movement-free for the 300 ms window. They are mostly low contrast.
 
 **Adds:** separates rate changes around an event from movement, the confound step 3
 found. 320 of 390 units "change around stimulus onset", with the baseline in the

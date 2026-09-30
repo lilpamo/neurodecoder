@@ -71,6 +71,7 @@ main { padding: 12px 16px 24px; min-width: 0; }
 .meta { color: var(--muted); font-size: 12px; }
 .caption { color: var(--ink2); font-size: 12px; margin: 0 0 4px; min-height: 18px; }
 .card img { width: 100%; display: block; }
+.card img[hidden] { display: none; }
 .err { color: var(--fail); font-size: 12px; margin: 4px 0 0; white-space: pre-wrap; }
 .err:empty { display: none; }
 
@@ -119,5 +120,5 @@ td.resp { text-align: center; }
 .trialbox { display: grid; gap: 6px; font-size: 12px; }
 .trialbox .row { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: center; }
 .trialbox .lbl { color: var(--muted); width: 64px; }
-.trialbox label.off { color: var(--muted); }
+.trialbox label.off, label.check.off { color: var(--muted); }
 .topbar > a.btn { margin: 0; text-decoration: none; color: var(--ink); }

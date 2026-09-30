@@ -5,7 +5,7 @@ import { OrbitControls } from '/static/vendor/three/OrbitControls.js';
 import { OBJLoader } from '/static/vendor/three/OBJLoader.js';
 
 const $ = (id) => document.getElementById(id);
-const state = { session: null, level: null, node: '', all: false, responsive: false, probe: '', split: '', trials: {}, unit: null, rows: [], tree: [], popRows: null, box: null };
+const state = { session: null, level: null, node: '', all: false, responsive: false, movementFree: false, probe: '', split: '', trials: {}, unit: null, rows: [], tree: [], popRows: null, box: null };
 
 // ---------- helpers ----------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -23,7 +23,7 @@ function params(extra = {}) {
     event: $('event').value, t0: $('t0').value, t1: $('t1').value, bin: $('bin').value,
     baseline: $('baseline').checked ? 1 : 0, b0: $('b0').value, b1: $('b1').value,
     all: state.all ? 1 : 0, node: state.node, probe: state.probe, split: state.split, tf: JSON.stringify(state.trials),
-    responsive: state.responsive ? 1 : 0, theme: theme(), ...extra,
+    responsive: state.responsive ? 1 : 0, movement_free: state.movementFree ? 1 : 0, theme: theme(), ...extra,
   });
   if (state.level) p.set('level', state.level);
   return p;
@@ -74,6 +74,8 @@ async function init() {
   state.probe = s.probes.includes(v.probe) ? v.probe : '';
   state.split = s.conditions[v.split] ? v.split : '';
   state.trials = v.trials || {};
+  state.movementFree = Boolean(v.movement_free) && s.movement.first_movement;
+  $('movementFree').checked = state.movementFree;
   renderTrialFilters();
   $('split').value = state.split;
   renderProbes();
@@ -89,6 +91,7 @@ async function init() {
   $('testWindows').textContent = `Response ${ms(r.response_window)} vs baseline ${ms(r.baseline_window)}, ` +
     `two-sided, against every circular shift of each spike train (≥ ${r.min_shift_s} s). ` +
     `Benjamini–Hochberg across the units tested, α = ${r.alpha}.`;
+  renderMovementNotes();
   await loadUnits();
   if (v.responsive) {  // results are never saved: rerun the test the view relied on
     await runTest();
@@ -113,7 +116,7 @@ function currentView() {
     baseline: $('baseline').checked, b0: +$('b0').value, b1: +$('b1').value,
     level: state.level || state.session.default_level, node: state.node,
     all: state.all, responsive: state.responsive, unit: state.unit, probe: state.probe, split: state.split,
-    trials: state.trials,
+    trials: state.trials, movement_free: state.movementFree,
   };
 }
 async function post(url, body) {
@@ -135,6 +138,7 @@ async function loadUnits() {
   state.tree = d.tree;
   renderTest(d.test);
   renderSelectivity(d.selectivity);
+  renderLocking(d.locking);
   renderTrialCounts(d.trials);
   if (!state.rows.some((u) => u.id === state.unit)) state.unit = state.rows.length ? state.rows[0].id : null;
   renderTree();
@@ -171,7 +175,7 @@ function renderTest(t) {
   }
   const on = t.probes.length === 1 ? `probe ${t.probes[0]}` : `probes ${t.probes.join(', ')}`;
   $('testSummary').textContent = `${t.n_responsive} of ${t.n_tests} units responsive on ${on} (${t.n_up} up, ${t.n_down} down) · ` +
-    `${t.n_trials} trials${t.n_excluded ? `, ${t.n_excluded} without this event excluded` : ''} · ${t.n_shifts.toLocaleString()} shifts each`;
+    `${t.n_trials} ${t.movement_free ? 'movement-free ' : ''}trials${t.n_excluded ? `, ${t.n_excluded} without this event excluded` : ''} · ${t.n_shifts.toLocaleString()} shifts each`;
 }
 async function runTest() {
   const button = $('runTest');
@@ -188,6 +192,43 @@ async function runTest() {
 }
 // A test belongs to one event and one unit set; changing either drops the filter.
 function resetResponsive() { state.responsive = false; $('responsive').checked = false; }
+
+// ---------- rail: movement ----------
+// Movement-free trials and the locking test need each trial's first movement; the
+// notes say what each does, or why it is unavailable. The server does the work.
+function renderMovementNotes() {
+  const m = state.session.movement, r = state.session.response, stim = $('event').value === 'stim_on';
+  const ms = (w) => `${w[0] * 1000} to ${w[1] * 1000} ms`;
+  $('movementFree').disabled = !m.first_movement || !stim;
+  $('freeBox').classList.toggle('off', $('movementFree').disabled);
+  $('freeNote').textContent = !m.first_movement ? 'No first-movement times in this session.'
+    : !stim ? 'Defined at stimulus onset only.'
+      : `Tests only trials whose first movement comes after ${r.response_window[1] * 1000} ms, the end of the response window. Plots keep every trial.`;
+  $('runLock').disabled = !m.first_movement;
+  $('lockWhat').textContent = !m.first_movement ? 'No first-movement times in this session.'
+    : `Rate ${ms(m.windows[1])} minus ${ms(m.windows[0])} around each trial's own first movement, ` +
+      `against reaction times permuted within signed contrast. Benjamini–Hochberg across the units tested, α = ${r.alpha}.`;
+}
+function renderLocking(t) {
+  if (!state.session.movement.first_movement) { $('lockSummary').textContent = ''; return; }
+  if (!t) { $('lockSummary').textContent = 'Not run for these units and trials.'; return; }
+  const on = t.probes.length === 1 ? `probe ${t.probes[0]}` : `probes ${t.probes.join(', ')}`;
+  $('lockSummary').textContent = `${t.n_locked} of ${t.n_tests} units on ${on} movement-locked · ${t.n_trials} trials · ` +
+    `null: ${t.null}, ${t.n_null.toLocaleString()} draws, seed ${t.seed}`;
+}
+async function runLocking() {
+  const button = $('runLock');
+  button.disabled = true;
+  $('lockSummary').textContent = 'Testing… about 30 s for 400 units.';
+  try {
+    await getJSON('/api/locking?' + params({ responsive: 0 }));
+    await loadUnits();
+  } catch (e) {
+    $('lockSummary').textContent = e.message;
+  } finally {
+    button.disabled = !state.session.movement.first_movement;
+  }
+}
 
 // ---------- rail: trial filters ----------
 // Set on the homepage (or in the project); changeable here. The server applies them.
@@ -294,7 +335,8 @@ function renderTable() {
         `<td class="num">${fmt(u.depth_um, 0)}</td><td class="num">${fmt(u.firing_rate_hz, 2)}</td><td>${fmt(u.label, 2)}</td>` +
         `<td class="${u.qc_passed ? '' : 'fail'}" title="${esc(u.qc_reason)}">${u.qc_passed ? 'pass' : 'fail'}</td>` +
         `<td class="resp" title="${respTitle(u)}">${{ up: '↑', down: '↓', no: '·' }[u.resp] || fmt(null)}</td>` +
-        `<td class="num" title="${selTitle(u)}">${u.sel_auroc == null ? fmt(null) : u.sel_auroc.toFixed(2) + (u.sel ? '*' : '')}</td></tr>`;
+        `<td class="num" title="${selTitle(u)}">${u.sel_auroc == null ? fmt(null) : u.sel_auroc.toFixed(2) + (u.sel ? '*' : '')}</td>` +
+        `<td class="resp" title="${lockTitle(u)}">${u.locked == null ? fmt(null) : u.locked ? (u.lock_hz > 0 ? '↑' : '↓') : '·'}</td></tr>`;
     })
     .join('');
 }
@@ -302,6 +344,10 @@ function renderTable() {
 function selTitle(u) {
   if (u.sel_auroc == null) return 'Not tested';
   return `AUROC ${u.sel_auroc.toFixed(3)}, p = ${u.sel_p.toPrecision(2)}, q = ${u.sel_q.toPrecision(2)}`;
+}
+function lockTitle(u) {
+  if (u.locked == null) return 'Not tested';
+  return `Δ at movement = ${u.lock_hz.toFixed(2)} Hz, p = ${u.lock_p.toPrecision(2)}, q = ${u.lock_q.toPrecision(2)}`;
 }
 function respTitle(u) {
   if (!u.resp) return 'Not tested';
@@ -318,7 +364,7 @@ function selectUnit(id, { scroll = true } = {}) {
 }
 
 // ---------- plots (PNGs from viz/) ----------
-const latest = { unit: 0, pop: 0, tuning: 0 };
+const latest = { unit: 0, pop: 0, tuning: 0, wheel: 0 };
 async function fetchPlot(kind, url, img, caption, err) {
   const seq = ++latest[kind];
   const r = await fetch(url);
@@ -336,7 +382,23 @@ async function fetchPlot(kind, url, img, caption, err) {
 }
 function plotUnit() {
   if (state.unit) fetchPlot('unit', '/api/unit.png?' + params({ unit: state.unit }), $('unitImg'), $('unitCaption'), $('unitErr'));
+  plotWheel();
   plotTuning();
+}
+// The wheel is the same for every unit: fetch it only when the event, window, bins or
+// trials change. Without a wheel, say why instead of drawing an empty panel.
+let wheelUrl = '';
+function plotWheel() {
+  const m = state.session.movement;
+  $('wheelImg').hidden = !m.wheel;
+  if (!m.wheel) {
+    $('wheelCaption').textContent = `No wheel: ${m.wheel_missing || 'not in this session'}.`;
+    return;
+  }
+  const url = '/api/wheel.png?' + params({ unit: '', node: '', probe: '', all: 0, responsive: 0, split: '' });
+  if (url === wheelUrl) return;
+  wheelUrl = url;
+  fetchPlot('wheel', url, $('wheelImg'), $('wheelCaption'), $('wheelErr'));
 }
 function plotTuning() {
   $('tuningBox').hidden = !state.split || !state.unit;
@@ -542,6 +604,12 @@ $('level').addEventListener('click', (e) => {
 $('all').addEventListener('change', () => { state.all = $('all').checked; resetResponsive(); loadUnits(); loadGeometry(); });
 $('runTest').addEventListener('click', runTest);
 $('runSel').addEventListener('click', runSelectivity);
+$('runLock').addEventListener('click', runLocking);
+$('movementFree').addEventListener('change', () => {
+  state.movementFree = $('movementFree').checked;
+  resetResponsive();  // results on all trials and on movement-free trials are kept apart
+  loadUnits();
+});
 $('split').addEventListener('change', () => { state.split = $('split').value; loadUnits(); });
 $('trialFilters').addEventListener('change', () => {
   state.trials = readTrialFilters();
@@ -568,7 +636,12 @@ $('export').addEventListener('click', () => act($('export'), 'Exporting…', asy
   return `Exported ${d.files.length} files to runs/${d.folder.split('/').pop()}`;
 }));
 $('responsive').addEventListener('change', () => { state.responsive = $('responsive').checked; loadUnits(); });
-$('event').addEventListener('change', () => { resetResponsive(); loadUnits(); });
+$('event').addEventListener('change', () => {
+  resetResponsive();
+  renderMovementNotes();
+  if ($('movementFree').disabled) state.movementFree = $('movementFree').checked = false;
+  loadUnits();
+});
 $('tree').addEventListener('click', (e) => {
   const n = e.target.closest('.node');
   if (!n) return;

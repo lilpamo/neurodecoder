@@ -21,7 +21,9 @@ from pathlib import Path
 
 import pandas as pd
 
+from neurodecoder.analysis.movement import DEFAULT_CONFIG as MOVEMENT_CONFIG
 from neurodecoder.analysis.responsiveness import DEFAULT_CONFIG as ANALYSIS_CONFIG
+from neurodecoder.analysis.tuning import DEFAULT_CONFIG as SELECTIVITY_CONFIG
 from neurodecoder.data.backends.phy import load_session_phy
 from neurodecoder.data.load import key_parts, load_session
 from neurodecoder.data.session import Session
@@ -62,6 +64,8 @@ DEFAULT_VIEW = {
     # analysis.conditions.TrialFilter as a dict; {} keeps every trial. Added later: older
     # files, computed on all trials, open on all trials.
     "trials": {},
+    # Responsiveness on movement-free trials only (analysis.movement); added later.
+    "movement_free": False,
 }
 
 
@@ -124,7 +128,12 @@ def _configs(qc) -> dict:
     path = PHY_QC_CONFIG if isinstance(qc, PhyUnitQC) else QC_CONFIG
     return {
         name: {"path": str(p.relative_to(REPO)), "sha256": _sha256(p)}
-        for name, p in (("qc", Path(path)), ("analysis", Path(ANALYSIS_CONFIG)))
+        for name, p in (
+            ("qc", Path(path)),
+            ("analysis", Path(ANALYSIS_CONFIG)),
+            ("selectivity", Path(SELECTIVITY_CONFIG)),
+            ("movement", Path(MOVEMENT_CONFIG)),
+        )
     }
 
 
@@ -189,7 +198,9 @@ def open_project(path: str | os.PathLike):
         where = source.folder if source.kind == "phy" else f"IBL session {source.eid}"
         warnings.append(f"the loaded data differ from when the project was saved ({where})")
     for name, config in _configs(qc).items():
-        if config["sha256"] != project["configs"][name]["sha256"]:
+        if name not in project["configs"]:  # files saved before this config was recorded
+            warnings.append(f"{config['path']} was not recorded when the project was saved")
+        elif config["sha256"] != project["configs"][name]["sha256"]:
             warnings.append(f"{config['path']} changed since the project was saved")
     return project, session, qc, warnings
 
