@@ -6,6 +6,56 @@ first.
 
 ---
 
+### 2026-09-30 — Homepage and data selection, part (b) (`analysis/catalog.py`, `studio/sets.py`, `studio/entry.py`)
+
+**3D overview:**
+- **What it shows:** every probe of the matching sessions as a line from the
+  manifest's insertion tip to its top, converted to CCF by `analysis/atlas.ccf_um`,
+  the same conversion as unit positions (`probe_lines`, tested against it).
+- **Lab colours:** the dataviz palette's eight categorical slots in fixed order,
+  largest lab first. The BWM has 12 labs, so the four smallest (churchlandlab,
+  steinmetzlab, mrsicflogellab, hoferlab) share the muted ink as "other labs"; a
+  ninth hue is never generated. The legend names every colour.
+- **Interaction:** hovering names the lab, subject, date and probe; clicking opens
+  the session. It updates with the filters.
+- **A bug found and fixed:** a drag to rotate ended in a click, which would open
+  whatever probe was under the pointer. Only a click that barely moved opens a
+  session now.
+- **Meshes:** `/mesh/<id>` no longer needs an open session.
+
+**Session sets (`data_root/sets/<name>.ndset.json`):**
+- **What a set holds:** plain JSON with the sorted eids, the manifest version, the
+  session and trial filters used, and a sha256 over all of it.
+- **Reopening:** a set restores the filters and the selection. It warns if the
+  manifest version changed, and refuses a file whose hash doesn't match.
+- **Opening by name only:** names are plain (letters, digits, space, `_`, `.`,
+  `-`), and sets are opened by name, never by path.
+- **One session at a time:** the session view still holds one session.
+
+**Open a Phy folder:**
+- **The root:** `configs/catalog.yaml` has `phy_root: phy`, relative to
+  `data_root`.
+- **Path checks:** every path is resolved with symlinks followed and must stay
+  inside the root, so `../` and symlinks pointing out are both refused.
+- **Plain-language refusals:** a folder without `spike_times.npy` or `params.py`,
+  or without `events.csv` beside `params.py`, is refused with a message saying
+  which.
+- **Completion** offers only folders inside the root, and marks which are Phy
+  folders and which have events.
+- **Demo folder:** the Phy-format d23a44ef export was copied to
+  `data_root/phy/d23a44ef/probe00`, with its `events.csv` and README. The original
+  in `derived/` stays for projects that point at it.
+
+**Recent projects:** the `*.ndstudio.json` files in `data_root/projects`, newest
+first, opened by name only.
+
+**No new dependency:** three.js was already vendored.
+
+**Observed while previewing:** twice, a different session was opened on the
+running server by something outside my steps, most likely the user trying it in
+another tab. The page's own open code hadn't run. Opening is a POST, so this is
+expected with more than one client; the page always shows which session is open.
+
 ### 2026-09-30 — Homepage and data selection, part (a) (`analysis/catalog.py`, trial filters in `analysis/conditions.py`, `studio/`)
 
 **Homepage:**

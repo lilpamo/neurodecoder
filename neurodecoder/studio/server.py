@@ -37,6 +37,7 @@ from neurodecoder.analysis.catalog import (
     filter_sessions,
     load_catalog,
     load_catalog_config,
+    probe_lines,
     region_counts,
     summary,
 )
@@ -72,7 +73,13 @@ from neurodecoder.analysis.units import unit_table
 from neurodecoder.data.atlas_meshes import mesh_path
 from neurodecoder.data.cache import SessionCache
 from neurodecoder.data.load import DataConfig, key_parts, load_data_config
-from neurodecoder.data.manifest import Manifest, build_manifest
+from neurodecoder.data.manifest import MANIFEST_VERSION, Manifest, build_manifest
+from neurodecoder.studio.entry import (
+    complete_phy_path,
+    project_path,
+    recent_projects,
+    resolve_phy_folder,
+)
 from neurodecoder.studio.export import export_view
 from neurodecoder.studio.project import (
     DEFAULT_VIEW,
@@ -83,10 +90,12 @@ from neurodecoder.studio.project import (
     open_project,
     save_project,
 )
+from neurodecoder.studio.sets import list_sets, read_set, save_set, set_path
 from neurodecoder.viz.studio_plots import (
     THEMES,
     TraceGroup,
     condition_colours,
+    lab_colours,
     population_figure,
     probe_colours,
     tuning_figure,
@@ -630,13 +639,87 @@ class App:
                 "manifest": m.provenance,
             },
             "open": None if self.studio is None else self.studio.session.eid,
+            "probes": self._probes(matching),
         }
+
+    def _probes(self, matching: pd.DataFrame) -> dict:
+        """The 3D overview: every matching probe as a CCF line, coloured by lab."""
+        lines = probe_lines(self.manifest, matching["eid"])
+        by_size = self.manifest.sessions["lab"].value_counts()
+        labs = sorted(by_size.index, key=lambda lab: (-by_size[lab], lab))
+        colours = {theme: lab_colours(labs, theme) for theme in THEMES}
+        n_slots = len(THEMES["light"]["categorical"])
+        return {
+            "brain_id": BRAIN_ID,
+            "lines": _records(lines),
+            "labs": [
+                {"lab": lab, "n_sessions": int(by_size[lab]), "other": i >= n_slots}
+                for i, lab in enumerate(labs)
+            ],
+            "colours": colours,
+        }
+
+    @property
+    def phy_root(self) -> Path:
+        root = Path(self.catalog_cfg.phy_root).expanduser()
+        return root if root.is_absolute() else self.data.data_root / root
+
+    def phy_complete(self, q: dict) -> dict:
+        return {
+            "root": str(self.phy_root),
+            "choices": complete_phy_path(self.phy_root, q.get("prefix", "")),
+        }
+
+    def projects(self, q: dict) -> dict:
+        return {"projects": recent_projects(self.data.data_root / "projects")}
+
+    @property
+    def sets_dir(self) -> Path:
+        return self.data.data_root / "sets"
+
+    def sets(self, q: dict) -> dict:
+        return {"sets": list_sets(self.sets_dir)}
+
+    def save_set(self, body: dict) -> dict:
+        path = save_set(
+            self.sets_dir,
+            body.get("name", ""),
+            body.get("eids", []),
+            self.manifest.provenance["manifest_version"],
+            body.get("session_filter", {}),
+            body.get("trial_filter", {}),
+        )
+        return {"saved": path.name, "sets": list_sets(self.sets_dir)}
+
+    def open_set(self, body: dict) -> dict:
+        found, warnings = read_set(set_path(self.sets_dir, body.get("name", "")), MANIFEST_VERSION)
+        known = set(self.manifest.sessions["eid"])
+        missing = [e for e in found["eids"] if e not in known]
+        if missing:
+            warnings.append(f"{len(missing)} of its sessions are not in this manifest")
+        return {"set": found, "warnings": warnings}
 
     def open(self, body: dict) -> dict:
         """Load a session and make it the open one. Everything cached is dropped."""
-        if body.get("kind") != "ibl" or not body.get("eid"):
-            raise ValueError("open needs {kind: 'ibl', eid: ...}")
-        source = Source(kind="ibl", eid=str(body["eid"]), backend="bwm")
+        kind = body.get("kind")
+        if kind == "project":
+            path = project_path(self.data.data_root / "projects", str(body.get("name", "")))
+            project, session, qc, warnings = open_project(path)
+            source = Source(**{k: v for k, v in project["source"].items() if k != "release"})
+            atlas = self.data.data_root / "atlas"
+            self.studio = Studio(session, qc, atlas, source, path, project["view"], warnings)
+            return {"eid": session.eid, "url": "/session", "warnings": warnings}
+        if kind == "phy":
+            folder, events = resolve_phy_folder(self.phy_root, str(body.get("path", "")))
+            source = Source(kind="phy", folder=str(folder), events=str(events))
+            name = folder.name
+        elif kind == "ibl" and body.get("eid"):
+            source = Source(kind="ibl", eid=str(body["eid"]), backend="bwm")
+            name = source.eid[:8]
+        else:
+            raise ValueError(
+                "open needs {kind: 'ibl', eid}, {kind: 'phy', path} or {kind: 'project', name}"
+            )
         session, qc = self._loader(source)
         if "trials" in body:
             chosen = TrialFilter.from_dict(body["trials"])
@@ -644,7 +727,7 @@ class App:
         else:
             chosen = default_trials(session.trials, self.catalog_cfg)
         view = {**DEFAULT_VIEW, "trials": chosen.to_dict()}
-        path = _new_project_path(self.data.data_root / "projects", source.eid[:8])
+        path = _new_project_path(self.data.data_root / "projects", name)
         self.studio = Studio(session, qc, self.data.data_root / "atlas", source, path, view)
         return {"eid": session.eid, "url": "/session"}
 
@@ -685,6 +768,12 @@ _SESSION_ROUTES = {
     "/api/unit.png": ("image/png", "unit_png"),
     "/api/population.png": ("image/png", "population_png"),
 }
+# path -> App method answering it; these work with no session open.
+_APP_ROUTES = {
+    "/api/phy/complete": "phy_complete",
+    "/api/projects": "projects",
+    "/api/sets": "sets",
+}
 _JSON_METHODS = {name for ctype, name in _SESSION_ROUTES.values() if ctype == "application/json"}
 
 
@@ -697,6 +786,8 @@ def make_handler(app: "App | Studio"):
 
     posts = {
         "/api/open": app.open,
+        "/api/sets/save": app.save_set,
+        "/api/sets/open": app.open_set,
         "/api/project": lambda view: app.require().save(view),
         "/api/export": lambda view: app.require().export(view),
     }
@@ -722,9 +813,12 @@ def make_handler(app: "App | Studio"):
                         return self._send(200, ctype, json.dumps(result).encode())
                     body, headers = result
                     return self._send(200, ctype, body, headers)
-                if match := _MESH.match(url.path):
-                    mesh = app.require().mesh(int(match.group(1)))
-                    return self._send(200, "text/plain", mesh)
+                if match := _MESH.match(url.path):  # the homepage's 3D view needs no session
+                    mesh = mesh_path(int(match.group(1)), app.data.data_root / "atlas")
+                    return self._send(200, "text/plain", mesh.read_bytes())
+                if url.path in _APP_ROUTES:
+                    body = json.dumps(getattr(app, _APP_ROUTES[url.path])(q)).encode()
+                    return self._send(200, "application/json", body)
                 if url.path.startswith("/static/") and (path := _static(url.path)):
                     ctype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
                     return self._send(200, ctype, path.read_bytes())

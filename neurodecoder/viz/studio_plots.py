@@ -85,6 +85,14 @@ def probe_colours(probes: list[str], theme: str) -> dict[str, str]:
     return {p: slots[i] if i < len(slots) else t["muted"] for i, p in enumerate(probes)}
 
 
+def lab_colours(labs: list[str], theme: str) -> dict[str, str]:
+    """lab -> colour, in the given order (largest lab first): the eight categorical slots,
+    then the muted ink shared by every other lab. Never a generated hue."""
+    t = _theme(theme)
+    slots = t["categorical"]
+    return {lab: slots[i] if i < len(slots) else t["muted"] for i, lab in enumerate(labs)}
+
+
 def _style(ax, t: dict) -> None:
     ax.set_facecolor("none")
     ax.tick_params(colors=t["ink2"], labelsize=8, length=3)

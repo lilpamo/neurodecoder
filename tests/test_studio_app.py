@@ -148,3 +148,46 @@ def test_the_default_trial_filter_keeps_only_what_the_session_supports(tmp_path)
     app.open({"kind": "ibl", "eid": "s1"})
     assert app.studio.view["trials"]["bwm_include"] is False
     assert app.studio.view["trials"]["exclude_nogo"] is False
+
+
+def test_opening_a_phy_folder_goes_through_the_root(tmp_path):
+    import dataclasses
+
+    from neurodecoder.analysis.catalog import load_catalog_config
+
+    root = tmp_path / "phy"
+    folder = write_phy_folder(root / "m1" / "probe00", SAMPLES, CLUSTERS, ks_label={3: "good"})
+    EVENTS.to_csv(folder / "events.csv", index=False)
+    app = App(load_data_config(), manifest=_manifest())
+    app.catalog_cfg = dataclasses.replace(load_catalog_config(), phy_root=str(root))
+    assert app.phy_complete({"prefix": "m1/"})["choices"][0]["phy"] is True
+    with pytest.raises(ValueError, match="outside the Phy folder root"):
+        app.open({"kind": "phy", "path": "../elsewhere"})
+    app.open({"kind": "phy", "path": "m1/probe00"})
+    assert app.studio.source.folder == str(folder.resolve())
+
+
+def test_a_recent_project_opens_by_name_only(tmp_path):
+    from neurodecoder.studio.project import DEFAULT_VIEW, Source, make_project, save_project
+
+    folder = write_phy_folder(tmp_path / "imec0", SAMPLES, CLUSTERS, ks_label={3: "good"})
+    EVENTS.to_csv(tmp_path / "events.csv", index=False)
+    source = Source(kind="phy", folder=str(folder), events=str(tmp_path / "events.csv"))
+    session = load_session_phy(folder, tmp_path / "events.csv")
+    data = dataclasses_replace_root(load_data_config(), tmp_path)
+    save_project(
+        make_project(source, session, QC, {**DEFAULT_VIEW, "event": "stim_on"}),
+        data.data_root / "projects" / "mine.ndstudio.json",
+    )
+    app = App(data, manifest=_manifest())
+    assert [p["name"] for p in app.projects({})["projects"]] == ["mine"]
+    with pytest.raises(ValueError, match="by its name"):
+        app.open({"kind": "project", "name": "../mine"})
+    app.open({"kind": "project", "name": "mine"})
+    assert app.studio.view["event"] == "stim_on"
+
+
+def dataclasses_replace_root(data, root):
+    import dataclasses
+
+    return dataclasses.replace(data, data_root=root)

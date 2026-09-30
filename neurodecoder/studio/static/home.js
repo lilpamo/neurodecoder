@@ -1,8 +1,10 @@
 // Homepage: choose a session. The page sends filters and draws what the server returns;
-// filtering, counts, sorting and the region tree are all computed server-side.
+// filtering, counts, sorting, the region tree and probe positions are all server-side.
+import { createOverview } from '/static/home3d.js';
+
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const state = { region: '', sort: 'date', desc: false, options: null, seq: 0 };
+const state = { region: '', sort: 'date', desc: false, options: null, seq: 0, selected: new Set(), probes: null };
 const COLUMNS = [
   ['lab', 'Lab'], ['subject', 'Subject'], ['date', 'Date'], ['n_probes', 'Probes', 'num'],
   ['n_good_units', 'Good units*', 'num'], ['n_trials', 'Trials', 'num'],
@@ -15,7 +17,13 @@ function setTheme(v) {
   else document.documentElement.dataset.theme = v;
   for (const b of $('theme').querySelectorAll('button')) b.setAttribute('aria-pressed', b.dataset.v === v);
   try { localStorage.setItem('studio-theme', v); } catch { /* storage may be unavailable */ }
+  if (state.probes) drawOverview(state.probes);
 }
+function theme() {
+  const t = document.documentElement.dataset.theme;
+  return t || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+}
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 $('theme').addEventListener('click', (e) => { if (e.target.dataset.v) setTheme(e.target.dataset.v); });
 try { const t = localStorage.getItem('studio-theme'); if (t) setTheme(t); } catch { /* ignore */ }
 
@@ -65,6 +73,34 @@ async function refresh() {
   $('backToSession').hidden = !d.open;
   drawTree(d.tree);
   drawTable(d.sessions);
+  state.probes = d.probes;
+  drawOverview(d.probes);
+}
+
+// ---------- 3D overview ----------
+const overview = createOverview($('overview'), {
+  onHover(row, e) {
+    const tip = $('overviewTip');
+    tip.hidden = !row;
+    if (!row) return;
+    tip.textContent = `${row.lab} · ${row.subject} · ${row.date} · ${row.probe_name} (click to open)`;
+    const rect = $('overview').getBoundingClientRect();
+    tip.style.left = `${e.clientX - rect.left}px`;
+    tip.style.top = `${e.clientY - rect.top}px`;
+  },
+  onPick(row) { openData({ kind: 'ibl', eid: row.eid, trials: trialFilter() }, `session ${row.eid.slice(0, 8)}`); },
+});
+let brainLoaded = false;
+function drawOverview(p) {
+  const colours = p.colours[theme()];
+  if (!brainLoaded) { brainLoaded = true; overview.loadBrain(p.brain_id, css('--muted')); } else overview.setMuted(css('--muted'));
+  overview.update(p, colours);
+  const present = new Set(p.lines.map((l) => l.lab));
+  const shown = p.labs.filter((l) => present.has(l.lab) && !l.other);
+  const others = p.labs.filter((l) => present.has(l.lab) && l.other);
+  $('labLegend').innerHTML = shown.map((l) => `<span class="item"><span class="sw" style="background:${colours[l.lab]}"></span>${esc(l.lab)}</span>`).join('') +
+    (others.length ? `<span class="item" title="${esc(others.map((l) => l.lab).join(', '))}"><span class="sw" style="background:${css('--muted')}"></span>${others.length} other labs</span>` : '');
+  $('overviewMeta').textContent = `${p.lines.length} probes · tip to top, from the manifest · drag to rotate`;
 }
 
 function setup(d) {
@@ -85,7 +121,8 @@ function setup(d) {
   boxes('tfContrasts', lv.contrasts, t.contrasts, (v) => `${v * 100}%`);
   boxes('tfBlocks', lv.blocks, t.blocks, (v) => `p(left) ${v}`);
   boxes('tfOutcomes', lv.outcomes, t.outcomes, (v) => (v < 0 ? 'error' : 'reward'));
-  $('heads').innerHTML = COLUMNS.map(([k, label, cls]) => `<th class="sortable ${cls || ''}" data-k="${k}">${label}</th>`).join('') + '<th></th><th></th>';
+  $('heads').innerHTML = '<th class="pick" title="Select for a session set"></th>' +
+    COLUMNS.map(([k, label, cls]) => `<th class="sortable ${cls || ''}" data-k="${k}">${label}</th>`).join('') + '<th></th><th></th>';
 }
 
 function drawTree(tree) {
@@ -104,26 +141,65 @@ function drawTable(rows) {
     else th.removeAttribute('aria-sort');
   }
   $('rows').innerHTML = rows.map((r) => `<tr data-eid="${esc(r.eid)}">` +
+    `<td class="pick"><input type="checkbox" data-pick="${esc(r.eid)}" ${state.selected.has(r.eid) ? 'checked' : ''}></td>` +
     COLUMNS.map(([k, , cls]) => `<td class="${cls || ''}" ${k === 'n_regions' ? `title="${esc(r.regions.join(', '))}"` : ''}>${esc(r[k])}</td>`).join('') +
     `<td title="${r.cached ? 'in the local cache' : 'loads from the release'}">${r.cached ? '<span class="dot">●</span>' : ''}</td>` +
     `<td class="open-cell"><button class="btn" data-open="${esc(r.eid)}">Open</button></td></tr>`).join('');
 }
 
-// ---------- opening a session ----------
-async function openSession(eid) {
-  $('loadingText').textContent = `Loading session ${eid.slice(0, 8)}… from the cache if it's there, else from the release.`;
+// ---------- opening data ----------
+async function post(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function openData(body, label) {
+  $('loadingText').textContent = `Loading ${label}…`;
   $('loading').hidden = false;
   try {
-    const r = await fetch('/api/open', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'ibl', eid, trials: trialFilter() }),
-    });
-    if (!r.ok) throw new Error(await r.text());
-    window.location = (await r.json()).url;
+    window.location = (await post('/api/open', body)).url;
   } catch (e) {
     $('loadingText').textContent = e.message;
-    setTimeout(() => { $('loading').hidden = true; }, 4000);
+    setTimeout(() => { $('loading').hidden = true; }, 5000);
   }
+}
+const openSession = (eid) => openData({ kind: 'ibl', eid, trials: trialFilter() }, `session ${eid.slice(0, 8)}… from the cache if it's there, else from the release`);
+
+// ---------- other ways in: Phy folders, recent projects, session sets ----------
+async function completePhy() {
+  const d = await (await fetch('/api/phy/complete?' + new URLSearchParams({ prefix: $('phyPath').value }))).json();
+  $('phyRoot').textContent = `Folders under ${d.root}. Each opens with the events.csv beside its params.py.`;
+  $('phyChoices').innerHTML = d.choices.map((c) => `<option value="${esc(c.path)}${c.phy ? '' : '/'}">${c.phy ? (c.events ? 'Phy folder' : 'Phy folder, no events.csv') : 'folder'}</option>`).join('');
+}
+async function loadProjects() {
+  const d = await (await fetch('/api/projects')).json();
+  $('projects').innerHTML = d.projects.length
+    ? d.projects.map((p) => `<div class="row"><span title="${esc(JSON.stringify(p.source))}">${esc(p.name)} · ${esc(p.source.kind === 'phy' ? 'Phy' : (p.source.eid || '').slice(0, 8))}</span><button class="btn" data-project="${esc(p.name)}">Open</button></div>`).join('')
+    : '<p class="note">No saved projects yet.</p>';
+}
+async function loadSets() {
+  const d = await (await fetch('/api/sets')).json();
+  $('setList').length = 1;
+  for (const s of d.sets) $('setList').add(new Option(`${s.name} (${s.n_sessions} sessions)`, s.name));
+}
+function applySet(set) {
+  const f = set.session_filter, t = set.trial_filter;
+  $('lab').value = (f.labs || [''])[0];
+  $('subject').value = (f.subjects || [''])[0];
+  $('dateFrom').value = f.date_from || '';
+  $('dateTo').value = f.date_to || '';
+  $('minUnits').value = f.min_good_units || 0;
+  $('minTrials').value = f.min_included_trials || 0;
+  $('nProbes').value = (f.n_probes || [''])[0];
+  for (const i of $('modalities').querySelectorAll('input')) i.checked = (f.modalities || []).includes(i.value);
+  state.region = f.region || '';
+  if (f.min_region_units) $('minRegionUnits').value = f.min_region_units;
+  $('tfInclude').checked = Boolean(t.bwm_include);
+  $('tfNogo').checked = Boolean(t.exclude_nogo);
+  for (const [id, key] of [['tfContrasts', 'contrasts'], ['tfBlocks', 'blocks'], ['tfOutcomes', 'outcomes']]) {
+    for (const i of $(id).querySelectorAll('input')) i.checked = !(t[key] || []).length || t[key].includes(+i.value);
+  }
+  state.selected = new Set(set.eids);
 }
 
 // ---------- wiring ----------
@@ -145,4 +221,32 @@ $('heads').addEventListener('click', (e) => {
   refresh();
 });
 $('rows').addEventListener('click', (e) => { const b = e.target.closest('[data-open]'); if (b) openSession(b.dataset.open); });
+$('rows').addEventListener('change', (e) => {
+  const box = e.target.closest('[data-pick]');
+  if (!box) return;
+  if (box.checked) state.selected.add(box.dataset.pick); else state.selected.delete(box.dataset.pick);
+  $('setMsg').textContent = `${state.selected.size} sessions selected.`;
+});
+$('phyPath').addEventListener('input', completePhy);
+$('phyOpen').addEventListener('click', () => openData({ kind: 'phy', path: $('phyPath').value }, `Phy folder ${$('phyPath').value}`));
+$('projects').addEventListener('click', (e) => { const b = e.target.closest('[data-project]'); if (b) openData({ kind: 'project', name: b.dataset.project }, `project ${b.dataset.project}`); });
+$('setSave').addEventListener('click', async () => {
+  try {
+    const d = await post('/api/sets/save', { name: $('setName').value, eids: [...state.selected], session_filter: sessionFilter(), trial_filter: trialFilter() });
+    $('setMsg').textContent = `Saved ${d.saved}: ${state.selected.size} sessions, with the filters that chose them.`;
+    loadSets();
+  } catch (e) { $('setMsg').textContent = e.message; }
+});
+$('setOpen').addEventListener('click', async () => {
+  if (!$('setList').value) return;
+  try {
+    const d = await post('/api/sets/open', { name: $('setList').value });
+    applySet(d.set);
+    $('setMsg').textContent = `Loaded ${d.set.name}: ${d.set.eids.length} sessions selected, filters restored.` + (d.warnings.length ? ` ⚠ ${d.warnings.join(' ')}` : '');
+    refresh();
+  } catch (e) { $('setMsg').textContent = e.message; }
+});
 refresh();
+completePhy();
+loadProjects();
+loadSets();

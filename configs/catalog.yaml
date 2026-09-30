@@ -11,3 +11,8 @@ min_region_units: 10
 default_trial_filter:
   bwm_include: true
   exclude_nogo: true
+
+# "Open a Phy folder" only opens folders under this root (relative to data_root unless
+# absolute); paths outside it, including through symlinks, are refused. Each folder
+# pairs with the events.csv beside its params.py.
+phy_root: phy

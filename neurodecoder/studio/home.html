@@ -6,6 +6,9 @@
 <title>Neurodecoder Studio · Choose data</title>
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/home.css">
+<script type="importmap">
+  { "imports": { "three": "/static/vendor/three/three.module.min.js" } }
+</script>
 </head>
 <body>
 <header class="topbar">
@@ -48,6 +51,27 @@
       <div class="big" id="counts">Loading the session catalog…</div>
       <p class="note" id="unitsNote"></p>
     </section>
+
+    <div class="homegrid">
+      <section class="card">
+        <header><h3>Where the matching probes are</h3><span class="meta" id="overviewMeta"></span></header>
+        <div class="overview" id="overview"><div class="tip" id="overviewTip" hidden></div></div>
+        <div class="legend" id="labLegend"></div>
+      </section>
+      <section class="card entry">
+        <header><h3>Other ways in</h3></header>
+        <h4>Open a Phy folder</h4>
+        <p class="note" id="phyRoot"></p>
+        <div class="inline"><input id="phyPath" list="phyChoices" placeholder="folder under the root, e.g. mouse1/probe00" autocomplete="off"><datalist id="phyChoices"></datalist><button class="btn" id="phyOpen">Open</button></div>
+        <p class="note" id="phyMsg"></p>
+        <h4>Recent projects</h4>
+        <div class="list" id="projects"></div>
+        <h4>Session sets</h4>
+        <div class="inline"><select id="setList"><option value="">Choose a saved set</option></select><button class="btn" id="setOpen">Load</button></div>
+        <div class="inline"><input id="setName" placeholder="name for the selected sessions"><button class="btn" id="setSave">Save selected</button></div>
+        <p class="note" id="setMsg">Tick sessions in the table below, then save them as a set.</p>
+      </section>
+    </div>
 
     <section class="card">
       <header><h3>Trial filters</h3><span class="meta">applied to every analysis in the session you open; excluded trials are counted, never dropped silently</span></header>

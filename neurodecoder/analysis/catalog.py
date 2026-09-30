@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from neurodecoder.analysis.atlas import region_at_level, region_tree, units_in_node
+from neurodecoder.analysis.atlas import ccf_um, region_at_level, region_tree, units_in_node
 from neurodecoder.data.manifest import (
     MANIFEST_VERSION,
     Manifest,
@@ -35,14 +35,17 @@ DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "catalog.yaml
 class CatalogConfig:
     min_region_units: int
     default_trial_filter: dict = field(default_factory=dict)
+    phy_root: str = "phy"  # relative to data_root unless absolute
 
 
 def load_catalog_config(path: str | os.PathLike = DEFAULT_CONFIG) -> CatalogConfig:
     raw = yaml.safe_load(Path(path).read_text()) or {}
-    keys = {"min_region_units", "default_trial_filter"}
+    keys = {"min_region_units", "default_trial_filter", "phy_root"}
     if set(raw) != keys:
         raise ValueError(f"{path}: keys {sorted(raw)}, expected {sorted(keys)}")
-    return CatalogConfig(int(raw["min_region_units"]), dict(raw["default_trial_filter"]))
+    return CatalogConfig(
+        int(raw["min_region_units"]), dict(raw["default_trial_filter"]), str(raw["phy_root"])
+    )
 
 
 def load_catalog(derived_root: str | os.PathLike, build: Callable[[], Manifest]) -> Manifest:
@@ -130,3 +133,19 @@ def region_counts(manifest: Manifest, eids, level: str) -> list[dict]:
     at_level = region_at_level(per_acronym.index.to_numpy(object), level)
     regions = np.repeat(at_level, per_acronym.to_numpy())
     return region_tree(regions)
+
+
+def probe_lines(manifest: Manifest, eids) -> pd.DataFrame:
+    """One row per probe of the given sessions: its tip and top in CCF µm (ap, dv, ml).
+
+    The manifest stores IBL xyz in metres; they are converted with atlas.ccf_um, the same
+    conversion as unit positions, so a probe line runs through its units.
+    """
+    ins = manifest.insertions[manifest.insertions["eid"].isin(list(eids))]
+    sessions = manifest.sessions.set_index("eid")[["lab", "subject", "date"]]
+    ins = ins.join(sessions, on="eid")
+    out = ins[["pid", "eid", "probe_name", "lab", "subject", "date"]].copy()
+    for end in ("tip", "top"):
+        xyz = ins[[f"{end}_x", f"{end}_y", f"{end}_z"]].to_numpy(np.float64)
+        out[end] = list(ccf_um(xyz))
+    return out.reset_index(drop=True)

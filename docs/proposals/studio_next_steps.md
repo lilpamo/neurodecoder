@@ -198,7 +198,7 @@ Each step says:
 As in steps 1–4, the engine goes in `analysis/`, the UI draws only, and a test is
 written first where the contract is clear.
 
-## 4b. Homepage and data selection — part (a) built, part (b) planned (2026-09-30)
+## 4b. Homepage and data selection — built (2026-09-30)
 
 Added before step 5, as **4b** so the later steps keep their numbers.
 
@@ -209,6 +209,13 @@ Added before step 5, as **4b** so the later steps keep their numbers.
 - The default trial filter is `bwm_include` plus excluding no-go, set in
   `configs/catalog.yaml`. It also applies to sessions opened with `--eid` or
   `--phy`.
+
+**Part (b) as built** (`docs/DECISIONS.md`, "Homepage and data selection, part
+(b)"), with these differences from the plan below:
+- Labs past the palette's eight colours share one muted "other labs" colour.
+- Only a click that barely moved opens a session from the 3D view, so a drag
+  never does.
+- The Phy root is `data_root/phy` (`configs/catalog.yaml`).
 
 **Part (a): the homepage, filters, trial filters and opening a session.**
 - **Starting up:** the server starts with no session and serves a homepage at

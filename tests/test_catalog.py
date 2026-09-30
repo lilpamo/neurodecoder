@@ -33,6 +33,8 @@ def _manifest() -> Manifest:
             "pid": ["p1", "p2", "p3", "p4"],
             "eid": ["s1", "s1", "s2", "s3"],
             "probe_name": ["probe00", "probe01", "probe00", "probe00"],
+            # Tip and top of each probe, IBL xyz in metres, as the real manifest has.
+            **{f"{end}_{a}": [0.0, 0.0, 0.0, 0.0] for end in ("tip", "top") for a in "xyz"},
         }
     )
     region_units = pd.DataFrame(
