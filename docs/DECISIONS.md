@@ -6,6 +6,52 @@ first.
 
 ---
 
+### 2026-09-30 — Direction change: Neurodecoder Studio, a post-sorting analysis app
+
+**Decision (the user's):** Neurodecoder becomes **Neurodecoder Studio**, a local
+app for analysing data after spike sorting. You load sorted Neuropixels units plus
+task events, browse units, and run event-aligned and tuning analyses in a GUI, with
+strict statistics. Spike sorting and curation stay in existing tools (Kilosort,
+Phy). This reverses CLAUDE.md §2's "not a general neuroscience analysis library" and
+narrows §1's cross-animal reliability question to parked work. The CLAUDE.md edits
+are proposed in chat, not applied yet. First step: a prototype on branch
+`studio-prototype`, from `phase3-gate-audit`.
+
+**Why:** Phase 3's gate did not pass on the confirmation set
+(`docs/NEGATIVE_RESULTS.md`, 2026-09-30). Only movement state beat
+`null_trialstruct`, so the reliability layer has no decoding signal to be reliable
+about yet.
+
+**Kept:** the data layer (`data/`, the session contract, cache, backends), unit QC
+(`qc/`), R2, R4, R6 and R7, and "missing means missing". R4 now applies to
+analyses: responsiveness claims need a shuffle null (next step, not the prototype).
+
+**Stack for the prototype: no new dependency.**
+- Python's standard-library `http.server` serves one HTML page and three endpoints.
+- matplotlib, already in §8, renders the plots server-side as PNGs.
+- The page is plain HTML and JavaScript, with no build step.
+
+The UI calls `neurodecoder/analysis/` only. Streamlit, Panel and NiceGUI were each
+one large dependency; none was needed for three plots and a table. Plotly stays
+excluded (§8). Revisit if interactivity like zoom or hover becomes necessary.
+
+**Analysis parameters are not preprocessing:** PSTH window, bin width and baseline
+are chosen per plot and never written to a cache, so R6's `PREPROC_VERSION` does
+not apply to them. The heatmap's row scaling is for display only
+(`scale_rows_for_display`), not an R3 normalisation.
+
+**Known caveat, not fixed in the prototype:** the population heatmap is sorted by
+peak time on the same trials it displays. That produces a diagonal even from noise.
+Cross-validated sorting (sort on half the trials, show the other half) belongs with
+the shuffle-null step.
+
+**Alternatives considered:** Streamlit (fastest to write, but a heavy dependency
+and a rerun-the-script model); a desktop Qt app (packaging cost, and Phase 8b
+already chose a local browser UI).
+
+**Consequences:** Phases 4–7 and 9 are parked with Phase 3. Phase 8b's local-app
+plan (installer, refusal screens, front end only) carries over to Studio.
+
 ### 2026-09-30 — Block split: adjacent pairs, scored per fold — made AFTER the confirmation set
 
 **Made after seeing the confirmation set's block table**
