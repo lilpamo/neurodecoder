@@ -1,4 +1,4 @@
-# CLAUDE.md — neurodecoder
+# CLAUDE.md — UnitWave Studio
 
 Project constitution. Read this file in full at the start of every session.
 If anything below conflicts with a request in chat, say so before acting.
@@ -7,10 +7,11 @@ If anything below conflicts with a request in chat, say so before acting.
 
 ## 1. What this project is
 
-**Neurodecoder Studio**: a local app for analysis after spike sorting. You load
+**UnitWave Studio**: a local app for analysis after spike sorting. You load
 sorted Neuropixels units plus task events, browse units, and run event-aligned and
 tuning analyses in a GUI, with strict statistics. Data comes from IBL (BWM, ONE),
-NWB, and, next, Kilosort/Phy folders.
+NWB, and Kilosort/Phy folders. (Renamed from Neurodecoder Studio on 2026-10-01; see
+"Rename: UnitWave Studio" in `docs/DECISIONS.md`.)
 
 Every plot and label the app shows must be something a careful reviewer would
 accept: trial counts visible, missing data excluded and counted, and every claim

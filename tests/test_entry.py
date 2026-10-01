@@ -13,8 +13,13 @@ from test_catalog import _manifest
 from neurodecoder.analysis.atlas import ccf_um
 from neurodecoder.analysis.catalog import probe_lines
 from neurodecoder.data.manifest import manifest_versions
-from neurodecoder.studio.entry import complete_phy_path, recent_projects, resolve_phy_folder
-from neurodecoder.studio.sets import SET_SUFFIX, list_sets, read_set, save_set
+from neurodecoder.studio.entry import (
+    complete_phy_path,
+    project_path,
+    recent_projects,
+    resolve_phy_folder,
+)
+from neurodecoder.studio.sets import SET_SUFFIX, list_sets, read_set, save_set, set_path
 
 EVENTS = pd.DataFrame({"intervals_0": [0.5], "intervals_1": [2.9], "stimOn_times": [0.6]})
 
@@ -155,3 +160,38 @@ def test_recent_projects_are_the_folders_files_newest_first(tmp_path):
     assert [p["name"] for p in listed] == ["c", "b", "a"]
     assert listed[0]["source"] == {"kind": "ibl", "eid": "ec"}
     assert recent_projects(tmp_path / "none") == []
+
+
+# ---------- file endings from before the rename (docs/DECISIONS.md) ----------
+
+
+def test_an_old_ending_set_opens_and_saving_writes_the_new_ending(tmp_path):
+    new = save_set(tmp_path, "cortex", ["s1"], 2, {}, {})
+    assert new.name == "cortex.unitwave-set.json"
+    old = new.rename(tmp_path / "cortex.ndset.json")
+    assert [(s["name"], s["file"]) for s in list_sets(tmp_path)] == [
+        ("cortex", "cortex.ndset.json")
+    ]
+    loaded, _ = read_set(set_path(tmp_path, "cortex"), 2)
+    assert loaded["eids"] == ["s1"]
+    again = save_set(tmp_path, "cortex", ["s1", "s2"], 2, {}, {})
+    assert again.name == "cortex.unitwave-set.json" and old.exists()  # the old file is kept
+    files = sorted(s["file"] for s in list_sets(tmp_path))
+    assert files == ["cortex.ndset.json", "cortex.unitwave-set.json"]
+    # By name the new file wins; by file name either opens.
+    assert set_path(tmp_path, "cortex") == again
+    assert set_path(tmp_path, "cortex.ndset.json") == old
+
+
+def test_recent_projects_list_both_endings_and_open_by_either(tmp_path):
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    for file in ("old.ndstudio.json", "new.unitwave.json"):
+        (projects / file).write_text(json.dumps({"source": {"kind": "ibl", "eid": "e"}}))
+    listed = sorted((p["name"], p["file"]) for p in recent_projects(projects))
+    assert listed == [("new", "new.unitwave.json"), ("old", "old.ndstudio.json")]
+    assert project_path(projects, "old") == projects / "old.ndstudio.json"
+    assert project_path(projects, "old.ndstudio.json") == projects / "old.ndstudio.json"
+    assert project_path(projects, "new") == projects / "new.unitwave.json"
+    with pytest.raises(ValueError, match="by its name"):
+        project_path(projects, "../old.ndstudio.json")

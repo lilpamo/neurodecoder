@@ -1,4 +1,4 @@
-// Neurodecoder Studio page. It draws what the server sends and computes no numbers:
+// UnitWave Studio page. It draws what the server sends and computes no numbers:
 // regions, trees, positions, PSTHs and heatmap row order all come from the API.
 import * as THREE from 'three';
 import { OrbitControls } from '/static/vendor/three/OrbitControls.js';
@@ -87,7 +87,10 @@ async function init() {
   $('split').value = state.split;
   renderProbes();
   state.level = noRegion ? null : (s.levels.includes(v.level) ? v.level : s.default_level);
-  $('projectStatus').textContent = s.project.path ? `Project: ${s.project.path.split('/').pop()}` : '';
+  const base = (p) => p.split('/').pop();
+  $('projectStatus').textContent = !s.project.path ? ''
+    : s.project.opened ? `Project: ${base(s.project.opened)} · saves as ${base(s.project.path)}`
+      : `Project: ${base(s.project.path)}`;
   $('projectStatus').title = s.project.path || '';
   renderWarnings(s.project.warnings);
   $('level').innerHTML = s.levels

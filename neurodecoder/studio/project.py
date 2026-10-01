@@ -1,4 +1,8 @@
-"""Studio project files (`*.ndstudio.json`): what was loaded and how it was viewed.
+"""Studio project files (`*.unitwave.json`): what was loaded and how it was viewed.
+
+Files saved before the rename end in `.ndstudio.json`. They still open, and saving
+one writes the new ending beside it, never over it (docs/DECISIONS.md, "Rename:
+UnitWave Studio").
 
 A project holds no results. It records:
 - the data source: an IBL session, or a Phy folder plus events CSV;
@@ -37,7 +41,10 @@ from neurodecoder.qc.units import DEFAULT_CONFIG as QC_CONFIG
 from neurodecoder.qc.units import load_qc_config
 
 PROJECT_VERSION = 1
-SUFFIX = ".ndstudio.json"
+SUFFIX = ".unitwave.json"
+# Endings read but never written: files saved before the rename.
+OLD_SUFFIXES = (".ndstudio.json",)
+SUFFIXES = (SUFFIX, *OLD_SUFFIXES)
 REPO = Path(__file__).resolve().parents[2]
 # Files a Phy folder may hold that change what Studio shows.
 PHY_FILES = (
@@ -183,11 +190,34 @@ def save_project(project: dict, path: str | os.PathLike) -> Path:
     """Write atomically: a crash mid-write never leaves half a project."""
     path = Path(path)
     if not path.name.endswith(SUFFIX):
-        raise ValueError(f"project files end in {SUFFIX}, got {path.name}")
+        raise ValueError(f"project files are written as *{SUFFIX}, got {path.name}")
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(project, indent=1))
     tmp.replace(path)
+    return path
+
+
+def project_stem(path: str | os.PathLike) -> str | None:
+    """A project file's name without its ending, for either ending; None otherwise."""
+    name = Path(path).name
+    for suffix in SUFFIXES:
+        if name.endswith(suffix) and len(name) > len(suffix):
+            return name[: -len(suffix)]
+    return None
+
+
+def saving_path(opened: str | os.PathLike) -> Path:
+    """Where a project opened from `opened` saves: the same file when it has the new
+    ending; otherwise the new ending beside it, at the next free name, so neither the
+    old file nor any other is overwritten."""
+    opened = Path(opened)
+    if opened.name.endswith(SUFFIX):
+        return opened
+    stem = project_stem(opened) or opened.name
+    path, n = opened.with_name(f"{stem}{SUFFIX}"), 2
+    while path.exists():
+        path, n = opened.with_name(f"{stem}-{n}{SUFFIX}"), n + 1
     return path
 
 

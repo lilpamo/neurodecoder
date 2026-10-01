@@ -35,6 +35,7 @@ from pathlib import Path
 
 import numpy as np
 
+from neurodecoder.studio import APP_NAME
 from neurodecoder.studio.project import REPO, make_project, view_to_query
 from neurodecoder.viz.studio_plots import (
     build_ccg_figure,
@@ -306,6 +307,7 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
 
     manifest = {
         "run_id": run_id,
+        "app": APP_NAME,
         "created": datetime.now(UTC).isoformat(),
         "command": "neurodecoder.studio export",
         "git": _git(),

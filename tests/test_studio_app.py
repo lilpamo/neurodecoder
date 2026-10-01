@@ -177,7 +177,7 @@ def test_a_recent_project_opens_by_name_only(tmp_path):
     data = dataclasses_replace_root(load_data_config(), tmp_path)
     save_project(
         make_project(source, session, QC, {**DEFAULT_VIEW, "event": "stim_on"}),
-        data.data_root / "projects" / "mine.ndstudio.json",
+        data.data_root / "projects" / "mine.unitwave.json",
     )
     app = App(data, manifest=_manifest())
     assert [p["name"] for p in app.projects({})["projects"]] == ["mine"]

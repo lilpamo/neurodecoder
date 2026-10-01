@@ -14,6 +14,7 @@ from neurodecoder.studio.project import (
     make_project,
     open_project,
     save_project,
+    saving_path,
     view_to_query,
 )
 
@@ -34,7 +35,7 @@ def _source(tmp_path) -> Source:
 def _saved(tmp_path):
     source = _source(tmp_path)
     session, qc = load_source(source)
-    path = tmp_path / "study.ndstudio.json"
+    path = tmp_path / "study.unitwave.json"
     save_project(make_project(source, session, qc, VIEW), path)
     return source, session, path
 
@@ -122,7 +123,7 @@ def test_trial_filters_round_trip_through_a_project(tmp_path):
     source = _source(tmp_path)
     session, qc = load_source(source)
     view = {**VIEW, "trials": {"outcomes": [1.0], "exclude_nogo": True}}
-    path = tmp_path / "filtered.ndstudio.json"
+    path = tmp_path / "filtered.unitwave.json"
     save_project(make_project(source, session, qc, view), path)
     project, _, _, warnings = open_project(path)
     assert warnings == [] and project["view"]["trials"] == {"outcomes": [1.0], "exclude_nogo": True}
@@ -159,7 +160,7 @@ def test_the_trial_view_state_round_trips_through_a_project(tmp_path):
         "trial_all": True,
         "trial_traces": ["pupil_left"],
     }
-    path = tmp_path / "trial.ndstudio.json"
+    path = tmp_path / "trial.unitwave.json"
     save_project(make_project(source, session, qc, {**VIEW, **state}), path)
     project, _, _, warnings = open_project(path)
     assert warnings == []
@@ -180,3 +181,23 @@ def test_exports_send_the_views_trial_filters_as_the_page_does():
     trials = {"bwm_include": True, "exclude_nogo": True}
     q = view_to_query({**VIEW, "trials": trials})
     assert json.loads(q["tf"]) == trials and "trials" not in q
+
+
+def test_an_old_ending_project_opens_and_saves_beside_itself(tmp_path):
+    from neurodecoder.studio.server import Studio
+
+    source, session, path = _saved(tmp_path)
+    old = path.rename(tmp_path / "study.ndstudio.json")  # saved before the rename
+    before = old.read_bytes()
+    project, _, qc, warnings = open_project(old)
+    assert warnings == []
+    studio = Studio(session, qc, tmp_path, source, old, project["view"])
+    assert studio.project_path == tmp_path / "study.unitwave.json"
+    studio.save(project["view"])
+    assert (tmp_path / "study.unitwave.json").exists()
+    assert old.read_bytes() == before  # the old file is kept as it was
+    # Opening the old file again never overwrites the new one: the next free name.
+    assert saving_path(old) == tmp_path / "study-2.unitwave.json"
+    assert saving_path(tmp_path / "study.unitwave.json") == tmp_path / "study.unitwave.json"
+    with pytest.raises(ValueError, match="written as"):
+        save_project(project, old)

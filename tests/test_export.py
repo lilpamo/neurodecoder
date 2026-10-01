@@ -57,7 +57,9 @@ def test_export_writes_vector_figures_sidecars_and_a_manifest(tmp_path):
     }
     assert (out / "unit.pdf").read_bytes()[:5] == b"%PDF-"
     assert "<svg" in (out / "unit.svg").read_text()
+    assert "UnitWave Studio" in (out / "unit.svg").read_text()  # the figure says what made it
     manifest = json.loads((out / "manifest.json").read_text())
+    assert manifest["app"] == "UnitWave Studio"
     assert manifest["view"] == VIEW
     assert manifest["project"]["source"]["kind"] == "phy"
     assert set(manifest["project"]["files"]) >= {"spike_times.npy", "events.csv"}

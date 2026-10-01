@@ -1,4 +1,4 @@
-# Neurodecoder Studio: next steps
+# UnitWave Studio: next steps
 
 Proposal, 2026-09-30. Follows the prototype on `studio-prototype`
 (`docs/DECISIONS.md`, "Direction change: Neurodecoder Studio"). Each step keeps
@@ -160,7 +160,8 @@ Built as planned (`docs/DECISIONS.md`, "Project files and figure export"):
 - Export writes SVG, PDF, JSON sidecars and a manifest to `runs/<time>_studio/`.
 
 
-**Project file:** `*.ndstudio.json`, a plain JSON file that holds:
+**Project file:** `*.ndstudio.json` (`*.unitwave.json` since the rename; old files
+still open), a plain JSON file that holds:
 - the data source (backend and eid, or Phy path), with a hash of the spike files;
 - the QC config hash;
 - the selected units and filters, including the region level and tree

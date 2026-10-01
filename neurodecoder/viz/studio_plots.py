@@ -13,6 +13,7 @@ import io
 import os
 from dataclasses import dataclass
 
+import matplotlib
 import numpy as np
 from matplotlib import rc_context
 from matplotlib.collections import LineCollection
@@ -109,16 +110,20 @@ def _style(ax, t: dict) -> None:
         ax.spines[side].set_color(t["axis"])
 
 
+# Written into every figure file, so a figure says what made it.
+_CREATOR = f"UnitWave Studio, with Matplotlib {matplotlib.__version__}"
+
+
 def _png(fig: Figure) -> bytes:
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=_DPI, transparent=True)
+    fig.savefig(buf, format="png", dpi=_DPI, transparent=True, metadata={"Software": _CREATOR})
     return buf.getvalue()
 
 
 def save_vector(fig: Figure, path: str | os.PathLike) -> None:
     """SVG or PDF by suffix, white background, text kept as editable text."""
     with rc_context({"svg.fonttype": "none", "pdf.fonttype": 42}):
-        fig.savefig(path, facecolor="white")
+        fig.savefig(path, facecolor="white", metadata={"Creator": _CREATOR})
 
 
 def _frame(fig: Figure, title: str | None, ink2: str):

@@ -5,7 +5,8 @@
 root, so `../` and symlinks pointing out are refused alike. A folder pairs with the
 `events.csv` beside its `params.py`. Missing files get plain-language refusals.
 
-**Recent projects** are the `*.ndstudio.json` files in `data_root/projects`, newest
+**Recent projects** are the `*.unitwave.json` files in `data_root/projects` (and
+`*.ndstudio.json`, from before the rename), newest
 first. They are opened by name only, never by a path.
 """
 
@@ -13,7 +14,7 @@ import json
 import os
 from pathlib import Path
 
-from neurodecoder.studio.project import SUFFIX
+from neurodecoder.studio.project import SUFFIXES, project_stem
 
 EVENTS_NAME = "events.csv"
 _MAX_CHOICES = 200
@@ -88,12 +89,13 @@ def complete_phy_path(root: str | os.PathLike, prefix: str) -> list[dict]:
 
 
 def recent_projects(directory: str | os.PathLike) -> list[dict]:
-    """Project files, newest first: name, its data source, when it was last saved."""
+    """Project files of either ending, newest first: name, file, its data source, when
+    it was last saved."""
     directory = Path(directory)
     if not directory.is_dir():
         return []
     rows = []
-    for path in directory.glob(f"*{SUFFIX}"):
+    for path in sorted({p for suffix in SUFFIXES for p in directory.glob(f"*{suffix}")}):
         try:
             raw = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
@@ -101,16 +103,23 @@ def recent_projects(directory: str | os.PathLike) -> list[dict]:
         source = {k: v for k, v in raw.get("source", {}).items() if v is not None}
         source.pop("release", None)
         rows.append(
-            {"name": path.name[: -len(SUFFIX)], "source": source, "mtime": path.stat().st_mtime}
+            {
+                "name": project_stem(path),
+                "file": path.name,
+                "source": source,
+                "mtime": path.stat().st_mtime,
+            }
         )
     return sorted(rows, key=lambda r: r["mtime"], reverse=True)
 
 
 def project_path(directory: str | os.PathLike, name: str) -> Path:
-    """A project in the directory by its name alone; never a path."""
+    """A project in the directory by its name or its file name alone; never a path. A
+    bare name prefers the new ending."""
     if not name or "/" in name or "\\" in name or name.startswith("."):
         raise ValueError("open a recent project by its name")
-    path = Path(directory) / f"{name}{SUFFIX}"
-    if not path.is_file():
-        raise ValueError(f"no project named {name!r}")
-    return path
+    candidates = [name] if project_stem(name) else [f"{name}{suffix}" for suffix in SUFFIXES]
+    for file in candidates:
+        if (Path(directory) / file).is_file():
+            return Path(directory) / file
+    raise ValueError(f"no project named {name!r}")

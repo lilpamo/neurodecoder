@@ -93,7 +93,7 @@ def test_posts_only_from_this_page_and_saving_writes_the_project(tmp_path):
     studio.source = Source(
         kind="phy", folder=str(tmp_path / "imec0"), events=str(tmp_path / "events.csv")
     )
-    studio.project_path = tmp_path / "p.ndstudio.json"
+    studio.project_path = tmp_path / "p.unitwave.json"
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(studio))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{server.server_address[1]}/api/project"

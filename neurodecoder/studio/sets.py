@@ -1,6 +1,7 @@
 """Session sets: a named list of sessions chosen on the homepage, for later (step 12).
 
-A set is plain JSON (`<name>.ndset.json` under `data_root/sets/`):
+A set is plain JSON (`<name>.unitwave-set.json` under `data_root/sets/`; sets saved
+before the rename end in `.ndset.json`, still open and are never overwritten):
 - the eids, sorted;
 - the manifest version they were chosen under;
 - the session and trial filters used;
@@ -17,7 +18,9 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
-SET_SUFFIX = ".ndset.json"
+SET_SUFFIX = ".unitwave-set.json"
+OLD_SET_SUFFIXES = (".ndset.json",)  # read, never written
+SET_SUFFIXES = (SET_SUFFIX, *OLD_SET_SUFFIXES)
 SET_VERSION = 1
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,79}$")
 
@@ -85,19 +88,21 @@ def read_set(path: str | os.PathLike, manifest_version: int) -> tuple[dict, list
 
 
 def list_sets(directory: str | os.PathLike) -> list[dict]:
-    """Saved sets, newest first: name, number of sessions, when saved."""
+    """Saved sets of either ending, newest first: name, file, number of sessions, when
+    saved."""
     directory = Path(directory)
     if not directory.is_dir():
         return []
     rows = []
-    for path in directory.glob(f"*{SET_SUFFIX}"):
+    for path in sorted({p for suffix in SET_SUFFIXES for p in directory.glob(f"*{suffix}")}):
         try:
             raw = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
             continue
         rows.append(
             {
-                "name": raw.get("name", path.name[: -len(SET_SUFFIX)]),
+                "name": raw.get("name", _stem(path.name)),
+                "file": path.name,
                 "n_sessions": len(raw.get("eids", [])),
                 "saved_at": raw.get("saved_at"),
                 "mtime": path.stat().st_mtime,
@@ -107,10 +112,20 @@ def list_sets(directory: str | os.PathLike) -> list[dict]:
 
 
 def set_path(directory: str | os.PathLike, name: str) -> Path:
-    """A saved set by its name alone; never a path."""
+    """A saved set by its name or file name alone; never a path. A bare name prefers
+    the new ending."""
     if not isinstance(name, str) or not _NAME.match(name) or ".." in name:
         raise ValueError("open a set by its name")
-    path = Path(directory) / f"{name}{SET_SUFFIX}"
-    if not path.is_file():
-        raise ValueError(f"no set named {name!r}")
-    return path
+    candidates = [name] if _stem(name) else [f"{name}{suffix}" for suffix in SET_SUFFIXES]
+    for file in candidates:
+        if (Path(directory) / file).is_file():
+            return Path(directory) / file
+    raise ValueError(f"no set named {name!r}")
+
+
+def _stem(file: str) -> str | None:
+    """A set file's name without its ending, for either ending; None otherwise."""
+    for suffix in SET_SUFFIXES:
+        if file.endswith(suffix) and len(file) > len(suffix):
+            return file[: -len(suffix)]
+    return None

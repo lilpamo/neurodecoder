@@ -174,13 +174,16 @@ async function completePhy() {
 async function loadProjects() {
   const d = await (await fetch('/api/projects')).json();
   $('projects').innerHTML = d.projects.length
-    ? d.projects.map((p) => `<div class="row"><span title="${esc(JSON.stringify(p.source))}">${esc(p.name)} · ${esc(p.source.kind === 'phy' ? 'Phy' : (p.source.eid || '').slice(0, 8))}</span><button class="btn" data-project="${esc(p.name)}">Open</button></div>`).join('')
+    ? d.projects.map((p) => `<div class="row"><span title="${esc(p.file)} · ${esc(JSON.stringify(p.source))}">${esc(p.name)} · ${esc(p.source.kind === 'phy' ? 'Phy' : (p.source.eid || '').slice(0, 8))}${p.file.endsWith('.unitwave.json') ? '' : ' <span class="note">(old file ending)</span>'}</span><button class="btn" data-project="${esc(p.file)}">Open</button></div>`).join('')
     : '<p class="note">No saved projects yet.</p>';
 }
 async function loadSets() {
   const d = await (await fetch('/api/sets')).json();
   $('setList').length = 1;
-  for (const s of d.sets) $('setList').add(new Option(`${s.name} (${s.n_sessions} sessions)`, s.name));
+  for (const s of d.sets) {
+    const old = s.file.endsWith('.unitwave-set.json') ? '' : ', old file ending';
+    $('setList').add(new Option(`${s.name} (${s.n_sessions} sessions${old})`, s.file));
+  }
 }
 function applySet(set) {
   const f = set.session_filter, t = set.trial_filter;

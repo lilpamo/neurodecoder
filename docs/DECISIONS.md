@@ -6,6 +6,48 @@ first.
 
 ---
 
+### 2026-10-01 — Rename: UnitWave Studio
+
+**Decision (the user's):** the app is renamed **UnitWave Studio**, in two parts.
+
+**What changes:**
+- **Part 1, the name users see:**
+  - every user-facing string: page titles, the app header, the server's startup
+    message, export manifests (an `app` field) and figure metadata (the creator
+    written into SVG, PDF and PNG files);
+  - the docstrings that name the app, and the plan doc's title;
+  - CLAUDE.md's title and §1, and a rewritten README;
+  - the `description` in pyproject.toml;
+  - file endings: projects `.ndstudio.json` → `.unitwave.json`, session sets
+    `.ndset.json` → `.unitwave-set.json`.
+- **Part 2, the Python package:**
+  - `neurodecoder` → `unitwave` (moved with `git mv`, so history follows), with
+    every import, `python -m` command and pyproject's `name`;
+  - environment variables `UNITWAVE_DATA_ROOT` and `UNITWAVE_NETWORK_TESTS`.
+
+**What deliberately doesn't change:**
+- **The data folder** `~/data/neurodecoder` (over 20 GB; `configs/data.yaml`).
+- **Cache keys,** so cached sessions load without a rebuild.
+- **Run folder names** (`runs/<time>_studio`) and **branch names.**
+- **The local repository folder and the GitHub repository:** the user renames those.
+- **The historical record:** older entries in this file (including the decision
+  titled "Direction change: Neurodecoder Studio"), NEGATIVE_RESULTS.md,
+  PRIOR_ART.md and ROADMAP.md keep their wording. CLAUDE.md's pointer to that
+  decision keeps its real title.
+
+**Backwards compatibility:**
+- **Old files open:** projects ending `.ndstudio.json` and sets ending
+  `.ndset.json` still open, and the recent-projects and sets lists show both
+  endings.
+- **Old files are never deleted or overwritten:** saving a project opened from an
+  old file writes the new ending beside it. If that name is taken, it takes the
+  next free name (`-2`, `-3`, ...). The page says where a save will go.
+- **Old environment variables (part 2):** `NEURODECODER_DATA_ROOT` and
+  `NEURODECODER_NETWORK_TESTS` keep working, with a one-line deprecation warning.
+  When both old and new are set, the new one wins.
+- **Until part 2,** the export manifest's `command` names the module as it is
+  (`neurodecoder.studio`).
+
 ### 2026-10-01 — Cross-correlograms and putative connections (`analysis/correlograms.py`, `configs/correlograms.yaml`)
 
 **What (the user's step 8):**

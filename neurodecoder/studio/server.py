@@ -1,4 +1,4 @@
-"""Neurodecoder Studio: a local web UI over one sorted session.
+"""UnitWave Studio: a local web UI over one sorted session.
 
 Standard-library HTTP server, no web framework. It loads the session once and answers
 each request by calling analysis/ (numbers), viz/ (PNGs) and data/atlas_meshes
@@ -109,6 +109,7 @@ from neurodecoder.data.cluster_files import (
 from neurodecoder.data.load import DataConfig, key_parts, load_data_config
 from neurodecoder.data.manifest import MANIFEST_VERSION, Manifest, build_manifest
 from neurodecoder.qc.phy import PhyUnitQC
+from neurodecoder.studio import APP_NAME
 from neurodecoder.studio.entry import (
     complete_phy_path,
     project_path,
@@ -124,6 +125,7 @@ from neurodecoder.studio.project import (
     make_project,
     open_project,
     save_project,
+    saving_path,
 )
 from neurodecoder.studio.sets import list_sets, read_set, save_set, set_path
 from neurodecoder.viz.studio_plots import (
@@ -179,7 +181,10 @@ class Studio:
         self._ibl_criteria: dict[str, pd.DataFrame | str] = {}
         self.qc = qc
         self.source = source  # where the session came from; recorded in projects and exports
-        self.project_path = project_path
+        # A project opened from a file with the old ending saves beside it under the new
+        # ending (studio.project.saving_path); the opened file is never overwritten.
+        self.opened_path = project_path
+        self.project_path = None if project_path is None else saving_path(project_path)
         self.view = {**DEFAULT_VIEW, **(view or {})}
         self.warnings = list(warnings)
         self.units = unit_table(session, qc)
@@ -323,6 +328,11 @@ class Studio:
             },
             "project": {
                 "path": None if self.project_path is None else str(self.project_path),
+                "opened": (
+                    str(self.opened_path)
+                    if self.opened_path is not None and self.opened_path != self.project_path
+                    else None
+                ),
                 "view": self.view,
                 "warnings": self.warnings,
             },
@@ -1373,7 +1383,7 @@ def make_handler(app: "App | Studio"):
 
 
 def _new_project_path(root: Path, name: str) -> Path:
-    """root/<name>.ndstudio.json, or <name>-2, -3, ... so no project is overwritten."""
+    """root/<name>.unitwave.json, or <name>-2, -3, ... so no project is overwritten."""
     path, n = root / f"{name}{SUFFIX}", 2
     while path.exists():
         path, n = root / f"{name}-{n}{SUFFIX}", n + 1
@@ -1440,7 +1450,7 @@ def main() -> None:
         port = int(sys.argv[sys.argv.index("--port") + 1])
     port = port or 8765
     opened = "" if app.studio is None else f"  ({app.studio.session.eid})"
-    print(f"Neurodecoder Studio: http://127.0.0.1:{port}{first}{opened}", flush=True)
+    print(f"{APP_NAME}: http://127.0.0.1:{port}{first}{opened}", flush=True)
     if app.studio is not None:
         print(f"Project file: {app.studio.project_path}", flush=True)
         for warning in app.studio.warnings:
