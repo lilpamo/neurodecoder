@@ -1,4 +1,4 @@
-# Unit quality panel (neurodecoder/analysis/unit_quality.py; docs/DECISIONS.md, 2026-10-01).
+# Unit quality panel (unitwave/analysis/unit_quality.py; docs/DECISIONS.md, 2026-10-01).
 # Display settings only: the panel shows QC already computed and labels nothing new.
 
 # ISI histogram: 0 to isi_max_s in bins of isi_bin_s; longer intervals are counted.

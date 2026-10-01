@@ -1,5 +1,4 @@
 import json
-import os
 import zipfile
 from pathlib import Path
 
@@ -7,7 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from neurodecoder.data.manifest import build_manifest, read_manifest, write_manifest
+from unitwave.data.manifest import build_manifest, read_manifest, write_manifest
+from unitwave.env import env
 
 # Two sessions: "s1" with probes p1 (2 good units of 3 clusters) and p2 (1 of 1),
 # and "s2" with probe p3 (1 of 2). s1 has wheel + left/body pose, s2 wheel only.
@@ -221,7 +221,7 @@ def test_write_and_read_round_trip(tmp_path):
     pd.testing.assert_frame_equal(back.region_units, m.region_units)
 
 
-DATA_ROOT = Path(os.environ.get("NEURODECODER_DATA_ROOT", "~/data/neurodecoder")).expanduser()
+DATA_ROOT = Path(env("DATA_ROOT", "~/data/neurodecoder")).expanduser()
 EPHYS = DATA_ROOT / "bwm_compressed/bwm_ephys/1.2.1"
 BEHAVIOUR = DATA_ROOT / "bwm_compressed/bwm_behavior/2.0.0"
 
@@ -282,7 +282,7 @@ def test_real_sessions_without_pose(real):
 
 @needs_bwm
 def test_real_modalities_match_what_the_backend_loads(real):
-    from neurodecoder.data.backends.bwm_compressed import load_session_bwm
+    from unitwave.data.backends.bwm_compressed import load_session_bwm
 
     eid = "d23a44ef-1402-4ed7-97f5-47e9a7a504d9"
     listed = set(real.sessions.set_index("eid").loc[eid, "modalities"])

@@ -7,8 +7,8 @@ import pandas as pd
 import pytest
 from scipy.stats import kstest
 
-from neurodecoder.analysis.responsiveness import ResponseConfig
-from neurodecoder.analysis.tuning import (
+from unitwave.analysis.responsiveness import ResponseConfig
+from unitwave.analysis.tuning import (
     SelectivityConfig,
     auroc,
     load_selectivity_config,
@@ -17,7 +17,7 @@ from neurodecoder.analysis.tuning import (
     tuning_curve,
     window_rates,
 )
-from neurodecoder.evaluation.nulls import generate_pseudo_blocks
+from unitwave.evaluation.nulls import generate_pseudo_blocks
 
 WINDOWS = ResponseConfig((-0.2, 0.0), (0.0, 0.5), 0.001, 10.0, 0.05)
 SEL = SelectivityConfig(n_permutations=2000, n_pseudo_sessions=2000, seed=0, min_trials=5)

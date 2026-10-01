@@ -1,4 +1,4 @@
-# Homepage session catalog (neurodecoder/analysis/catalog.py; docs/DECISIONS.md,
+# Homepage session catalog (unitwave/analysis/catalog.py; docs/DECISIONS.md,
 # 2026-09-30).
 
 # A session matches a region only if it has at least this many of the release's good

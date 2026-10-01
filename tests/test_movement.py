@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 from scipy.stats import kstest
 
-from neurodecoder.analysis.movement import (
+from unitwave.analysis.movement import (
     MovementConfig,
     load_movement_config,
     movement_free,
@@ -13,8 +13,8 @@ from neurodecoder.analysis.movement import (
     reaction_times,
     wheel_speed_psth,
 )
-from neurodecoder.analysis.responsiveness import ResponseConfig, responsiveness
-from neurodecoder.data.session import TimeSeries
+from unitwave.analysis.responsiveness import ResponseConfig, responsiveness
+from unitwave.data.session import TimeSeries
 
 CFG = MovementConfig(pre_window=(-0.2, 0.0), post_window=(0.0, 0.2), n_permutations=2000, seed=0)
 RESP = ResponseConfig((-0.2, 0.0), (0.0, 0.3), 0.005, 10.0, 0.05)
@@ -130,7 +130,7 @@ def test_locking_is_deterministic_and_needs_movement_times():
 
 
 def test_reaction_time_splits_early_and_late_at_the_median():
-    from neurodecoder.analysis.conditions import available_conditions, condition
+    from unitwave.analysis.conditions import available_conditions, condition
 
     trials = pd.DataFrame(
         {

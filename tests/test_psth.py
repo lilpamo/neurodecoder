@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from neurodecoder.analysis.events import EVENTS, event_times
-from neurodecoder.analysis.psth import (
+from unitwave.analysis.events import EVENTS, event_times
+from unitwave.analysis.psth import (
     bin_edges,
     peak_order,
     population_psth,

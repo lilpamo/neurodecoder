@@ -1,4 +1,4 @@
-# Selectivity: AUROC between two conditions per unit (neurodecoder/analysis/tuning.py;
+# Selectivity: AUROC between two conditions per unit (unitwave/analysis/tuning.py;
 # docs/DECISIONS.md, 2026-09-30). Windows and alpha come from configs/analysis.yaml.
 
 # Label permutations for side, choice and outcome (stratified; see tuning.py).

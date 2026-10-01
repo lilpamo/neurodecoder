@@ -10,16 +10,16 @@ import pytest
 from phy_folder import write_phy_folder
 from test_catalog import _manifest
 
-from neurodecoder.analysis.atlas import ccf_um
-from neurodecoder.analysis.catalog import probe_lines
-from neurodecoder.data.manifest import manifest_versions
-from neurodecoder.studio.entry import (
+from unitwave.analysis.atlas import ccf_um
+from unitwave.analysis.catalog import probe_lines
+from unitwave.data.manifest import manifest_versions
+from unitwave.studio.entry import (
     complete_phy_path,
     project_path,
     recent_projects,
     resolve_phy_folder,
 )
-from neurodecoder.studio.sets import SET_SUFFIX, list_sets, read_set, save_set, set_path
+from unitwave.studio.sets import SET_SUFFIX, list_sets, read_set, save_set, set_path
 
 EVENTS = pd.DataFrame({"intervals_0": [0.5], "intervals_1": [2.9], "stimOn_times": [0.6]})
 

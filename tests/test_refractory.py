@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from neurodecoder.data.load import load_data_config
-from neurodecoder.qc.refractory import (
+from unitwave.data.load import load_data_config
+from unitwave.qc.refractory import (
     max_acceptable_violations,
     pairs_closer_than,
     sliding_rp_pass,

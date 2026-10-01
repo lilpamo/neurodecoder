@@ -1,14 +1,14 @@
 import pandas as pd
 import pytest
 
-from neurodecoder.analysis.catalog import (
+from unitwave.analysis.catalog import (
     SessionFilter,
     filter_sessions,
     load_catalog,
     region_counts,
     summary,
 )
-from neurodecoder.data.manifest import Manifest, manifest_versions
+from unitwave.data.manifest import Manifest, manifest_versions
 
 
 def _manifest() -> Manifest:

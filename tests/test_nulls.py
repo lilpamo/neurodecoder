@@ -1,18 +1,18 @@
-import os
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from neurodecoder.data.session import (
+from unitwave.data.session import (
     BEHAVIOUR_FIELDS,
     TRIAL_FIELDS,
     UNIT_FIELDS,
     Capabilities,
     Session,
 )
-from neurodecoder.evaluation.nulls import (
+from unitwave.env import env
+from unitwave.evaluation.nulls import (
     NullConfig,
     bin_trialstruct_features,
     draw_shifts,
@@ -21,10 +21,10 @@ from neurodecoder.evaluation.nulls import (
     shift_trial_target,
     trial_trialstruct_features,
 )
-from neurodecoder.preprocess.binning import BinnedSpikes, PreprocConfig
-from neurodecoder.qc.units import UnitQC
-from neurodecoder.targets.bins import BinTarget
-from neurodecoder.targets.trials import TrialTarget
+from unitwave.preprocess.binning import BinnedSpikes, PreprocConfig
+from unitwave.qc.units import UnitQC
+from unitwave.targets.bins import BinTarget
+from unitwave.targets.trials import TrialTarget
 
 FP = PreprocConfig(bin_ms=20, qc=UnitQC(1.0, ("void", "root"), 0.1)).fingerprint()
 CFG = NullConfig(
@@ -231,7 +231,7 @@ def test_default_config():
 
 
 def test_pseudo_blocks_follow_the_ibl_protocol():
-    from neurodecoder.evaluation.nulls import generate_pseudo_blocks
+    from unitwave.evaluation.nulls import generate_pseudo_blocks
 
     p = generate_pseudo_blocks(600, seed=3)
     assert p.shape == (600,) and (p[:90] == 0.5).all()
@@ -244,7 +244,7 @@ def test_pseudo_blocks_follow_the_ibl_protocol():
     assert (generate_pseudo_blocks(50, seed=0) == 0.5).all()
 
 
-_TRIALS = Path(os.environ.get("NEURODECODER_DATA_ROOT", "~/data/neurodecoder")).expanduser() / (
+_TRIALS = Path(env("DATA_ROOT", "~/data/neurodecoder")).expanduser() / (
     "bwm_compressed/bwm_ephys/1.2.1/metadata/trials.parquet"
 )
 
@@ -253,7 +253,7 @@ _TRIALS = Path(os.environ.get("NEURODECODER_DATA_ROOT", "~/data/neurodecoder")).
 def test_pseudo_block_lengths_match_the_release():
     from scipy.stats import ks_2samp
 
-    from neurodecoder.evaluation.nulls import generate_pseudo_blocks
+    from unitwave.evaluation.nulls import generate_pseudo_blocks
 
     def complete_block_lengths(prior):
         prior = prior[prior != 0.5]

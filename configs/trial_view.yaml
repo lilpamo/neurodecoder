@@ -1,4 +1,4 @@
-# Single-trial view (neurodecoder/analysis/trial_view.py; docs/DECISIONS.md, 2026-09-30).
+# Single-trial view (unitwave/analysis/trial_view.py; docs/DECISIONS.md, 2026-09-30).
 # Descriptive only: no statistic, no null.
 
 # The plot runs from the first shown trial's start (intervals_0) minus pre_pad_s to

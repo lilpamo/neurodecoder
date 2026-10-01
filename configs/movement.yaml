@@ -1,4 +1,4 @@
-# Movement controls (neurodecoder/analysis/movement.py; docs/DECISIONS.md, 2026-09-30).
+# Movement controls (unitwave/analysis/movement.py; docs/DECISIONS.md, 2026-09-30).
 # Windows are seconds relative to each trial's first movement, half-open [start, stop).
 
 # Movement locking: mean over trials of (rate in post_window - rate in pre_window)

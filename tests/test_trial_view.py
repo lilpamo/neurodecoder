@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from neurodecoder.analysis.movement import binned_wheel_speed, wheel_speed_psth
-from neurodecoder.analysis.trial_view import (
+from unitwave.analysis.movement import binned_wheel_speed, wheel_speed_psth
+from unitwave.analysis.trial_view import (
     TrialViewConfig,
     load_trial_view_config,
     position,
@@ -17,7 +17,7 @@ from neurodecoder.analysis.trial_view import (
     trial_view,
     trial_window,
 )
-from neurodecoder.data.session import CANONICAL_FIELDS, Capabilities, Session, TimeSeries
+from unitwave.data.session import CANONICAL_FIELDS, Capabilities, Session, TimeSeries
 
 CFG = TrialViewConfig(pre_pad_s=0.5, post_pad_s=0.5, speed_bin_s=0.02, n_trials=3, max_trials=9)
 

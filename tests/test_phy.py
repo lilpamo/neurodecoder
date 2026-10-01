@@ -5,11 +5,11 @@ import pandas as pd
 import pytest
 from phy_folder import write_phy_folder
 
-from neurodecoder.analysis.units import unit_table
-from neurodecoder.data.backends.phy import load_session_phy, read_params
-from neurodecoder.data.load import load_data_config
-from neurodecoder.qc.phy import PhyUnitQC, load_phy_qc_config, phy_unit_qc, refractory_passes
-from neurodecoder.qc.units import task_firing_rates
+from unitwave.analysis.units import unit_table
+from unitwave.data.backends.phy import load_session_phy, read_params
+from unitwave.data.load import load_data_config
+from unitwave.qc.phy import PhyUnitQC, load_phy_qc_config, phy_unit_qc, refractory_passes
+from unitwave.qc.units import task_firing_rates
 
 FS = 30000.0
 # Hand-built example, globally sorted like Kilosort's output.
@@ -192,7 +192,7 @@ ALF = (
 
 @pytest.mark.skipif(not ALF.exists(), reason="ONE cache for d23a44ef not available")
 def test_real_ibl_sorting_round_trips_through_the_phy_format(tmp_path):
-    from neurodecoder.data.load import load_session
+    from unitwave.data.load import load_session
 
     times = np.load(ALF / "spikes.times.npy")
     clusters = np.load(ALF / "spikes.clusters.npy")

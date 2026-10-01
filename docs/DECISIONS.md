@@ -45,8 +45,32 @@ first.
 - **Old environment variables (part 2):** `NEURODECODER_DATA_ROOT` and
   `NEURODECODER_NETWORK_TESTS` keep working, with a one-line deprecation warning.
   When both old and new are set, the new one wins.
-- **Until part 2,** the export manifest's `command` names the module as it is
-  (`neurodecoder.studio`).
+
+**Part 2, done:**
+- **The package moved** with `git mv neurodecoder unitwave`: 84 files, as renames.
+  Every reference changed with one pattern, the package name as a whole word not
+  after "/", which keeps `~/data/neurodecoder` and the uppercase variable names.
+  That is 421 replacements, and every diff line in a moved file is that one name.
+  Commands are `python -m unitwave.studio.server`, and the export manifest's
+  `command` is `unitwave.studio export`.
+- **Environment variables** are read through `unitwave/env.py`, which tests cover:
+  new name, old name with one warning line, both set, unset.
+  - 19 tests now read `env("DATA_ROOT", ...)` instead of `os.environ.get(...)`,
+    and their unused `import os` went.
+  - `test_load.py` sets `UNITWAVE_DATA_ROOT`.
+  - No other test changed.
+- **Before and after:** 559 passed and 2 skipped before (at ad85466). After, 563
+  passed and 2 skipped: the same 561 test IDs plus the 4 new environment tests.
+- **Cache keys are identical** (checked on three sessions). d23a44ef loads from the
+  cache in 0.4 s without calling a backend.
+- **Kept on purpose:**
+  - the comment commands in `configs/runs/phase3_*.yaml`: Phase 3's run
+    manifests record those files' byte hashes, and NEGATIVE_RESULTS and older
+    entries here cite them;
+  - `docs/PROMPTS.md` and ROADMAP.md's `neurodecoder analyze`: historical.
+- **Consequence:** the Studio configs' comments now name `unitwave/...`, so their
+  byte hashes changed. Projects saved before warn once that `configs/analysis.yaml`
+  and others changed. The change is comment-only, and re-saving clears it.
 
 ### 2026-10-01 — Cross-correlograms and putative connections (`analysis/correlograms.py`, `configs/correlograms.yaml`)
 

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from neurodecoder.analysis.atlas import (
+from unitwave.analysis.atlas import (
     LEVELS,
     ccf_um,
     depth_runs,
@@ -11,7 +11,7 @@ from neurodecoder.analysis.atlas import (
     region_tree,
     units_in_node,
 )
-from neurodecoder.data.load import load_data_config
+from unitwave.data.load import load_data_config
 
 UNITS = np.array(["CA1", "DG-mo", "ml", "VISam5", None], dtype=object)
 
@@ -94,7 +94,7 @@ ATLAS_DIR = load_data_config().data_root / "atlas"
 def test_every_d23a44ef_unit_lands_in_its_own_region():
     from iblatlas.atlas import AllenAtlas
 
-    from neurodecoder.data.load import load_session
+    from unitwave.data.load import load_session
 
     atlas = AllenAtlas(res_um=25, hist_path=ATLAS_DIR / "average_template_25.nrrd")
     units = load_session("d23a44ef-1402-4ed7-97f5-47e9a7a504d9", "bwm").units

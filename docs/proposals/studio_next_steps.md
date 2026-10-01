@@ -3,7 +3,7 @@
 Proposal, 2026-09-30. Follows the prototype on `studio-prototype`
 (`docs/DECISIONS.md`, "Direction change: Neurodecoder Studio"). Each step keeps
 the prototype's rule: the UI computes nothing itself. It loads through `data/`
-and `qc/`, gets every number from `neurodecoder/analysis/` and draws through
+and `qc/`, gets every number from `unitwave/analysis/` and draws through
 `viz/`.
 
 ## 1. Import Kilosort / Phy folders — done (2026-09-30)

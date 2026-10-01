@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from neurodecoder.analysis.unit_quality import (
+from unitwave.analysis.unit_quality import (
     QualityConfig,
     autocorrelogram,
     isi_histogram,
@@ -13,15 +13,15 @@ from neurodecoder.analysis.unit_quality import (
     presence_ratio,
     rate_over_session,
 )
-from neurodecoder.data.cluster_files import (
+from unitwave.data.cluster_files import (
     ibl_criteria,
     ibl_session_folder,
     ibl_sorting_folder,
     ibl_waveform,
     phy_waveform,
 )
-from neurodecoder.data.load import load_data_config
-from neurodecoder.qc.refractory import sliding_rp_details, sliding_rp_pass
+from unitwave.data.load import load_data_config
+from unitwave.qc.refractory import sliding_rp_details, sliding_rp_pass
 
 
 def test_default_config():

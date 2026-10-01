@@ -11,11 +11,11 @@ import pytest
 from phy_folder import write_phy_folder
 from test_catalog import _manifest
 
-from neurodecoder.analysis.responsiveness import ResponseConfig
-from neurodecoder.data.backends.phy import load_session_phy
-from neurodecoder.data.load import load_data_config
-from neurodecoder.qc.phy import PhyUnitQC
-from neurodecoder.studio.server import App, Studio, build_app, make_handler
+from unitwave.analysis.responsiveness import ResponseConfig
+from unitwave.data.backends.phy import load_session_phy
+from unitwave.data.load import load_data_config
+from unitwave.qc.phy import PhyUnitQC
+from unitwave.studio.server import App, Studio, build_app, make_handler
 
 SAMPLES = [30, 60, 90, 150, 30000, 45000, 60000, 90000]
 CLUSTERS = [3, 7, 3, 7, 3, 11, 9, 7]
@@ -153,7 +153,7 @@ def test_the_default_trial_filter_keeps_only_what_the_session_supports(tmp_path)
 def test_opening_a_phy_folder_goes_through_the_root(tmp_path):
     import dataclasses
 
-    from neurodecoder.analysis.catalog import load_catalog_config
+    from unitwave.analysis.catalog import load_catalog_config
 
     root = tmp_path / "phy"
     folder = write_phy_folder(root / "m1" / "probe00", SAMPLES, CLUSTERS, ks_label={3: "good"})
@@ -168,7 +168,7 @@ def test_opening_a_phy_folder_goes_through_the_root(tmp_path):
 
 
 def test_a_recent_project_opens_by_name_only(tmp_path):
-    from neurodecoder.studio.project import DEFAULT_VIEW, Source, make_project, save_project
+    from unitwave.studio.project import DEFAULT_VIEW, Source, make_project, save_project
 
     folder = write_phy_folder(tmp_path / "imec0", SAMPLES, CLUSTERS, ks_label={3: "good"})
     EVENTS.to_csv(tmp_path / "events.csv", index=False)

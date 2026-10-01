@@ -4,10 +4,10 @@ import pandas as pd
 import pytest
 from phy_folder import write_phy_folder
 
-from neurodecoder.analysis.responsiveness import ResponseConfig
-from neurodecoder.data.backends.phy import load_session_phy
-from neurodecoder.qc.phy import PhyUnitQC
-from neurodecoder.studio.server import Studio, _static
+from unitwave.analysis.responsiveness import ResponseConfig
+from unitwave.data.backends.phy import load_session_phy
+from unitwave.qc.phy import PhyUnitQC
+from unitwave.studio.server import Studio, _static
 
 SAMPLES = [30, 60, 90, 150, 30000, 45000, 60000, 90000]
 CLUSTERS = [3, 7, 3, 7, 3, 11, 9, 7]
@@ -86,8 +86,8 @@ def test_posts_only_from_this_page_and_saving_writes_the_project(tmp_path):
     import urllib.request
     from http.server import ThreadingHTTPServer
 
-    from neurodecoder.studio.project import DEFAULT_VIEW, Source
-    from neurodecoder.studio.server import make_handler
+    from unitwave.studio.project import DEFAULT_VIEW, Source
+    from unitwave.studio.server import make_handler
 
     studio = _studio(tmp_path)
     studio.source = Source(
@@ -162,8 +162,8 @@ def test_responsiveness_is_corrected_over_the_units_tested_on_a_probe(tmp_path):
 
 
 def test_the_3d_view_follows_the_probe_filter_on_real_data(tmp_path):
-    from neurodecoder.data.load import load_data_config, load_session
-    from neurodecoder.qc.units import load_qc_config
+    from unitwave.data.load import load_data_config, load_session
+    from unitwave.qc.units import load_qc_config
 
     eid = "d23a44ef-1402-4ed7-97f5-47e9a7a504d9"
     try:
@@ -188,10 +188,10 @@ def test_conditions_offered_follow_the_events_file(tmp_path):
 
 
 def test_split_tuning_and_selectivity_on_real_data(tmp_path):
-    from neurodecoder.data.load import load_data_config, load_session
-    from neurodecoder.qc.units import load_qc_config
-    from neurodecoder.studio.export import export_view
-    from neurodecoder.studio.project import DEFAULT_VIEW, Source
+    from unitwave.data.load import load_data_config, load_session
+    from unitwave.qc.units import load_qc_config
+    from unitwave.studio.export import export_view
+    from unitwave.studio.project import DEFAULT_VIEW, Source
 
     eid = "d23a44ef-1402-4ed7-97f5-47e9a7a504d9"
     try:
@@ -251,11 +251,11 @@ def test_phy_sessions_say_why_there_are_no_movement_controls(tmp_path):
 def test_movement_controls_on_real_data(tmp_path):
     import json
 
-    from neurodecoder.analysis.movement import MovementConfig
-    from neurodecoder.data.load import load_data_config, load_session
-    from neurodecoder.qc.units import load_qc_config
-    from neurodecoder.studio.export import export_view
-    from neurodecoder.studio.project import DEFAULT_VIEW, Source
+    from unitwave.analysis.movement import MovementConfig
+    from unitwave.data.load import load_data_config, load_session
+    from unitwave.qc.units import load_qc_config
+    from unitwave.studio.export import export_view
+    from unitwave.studio.project import DEFAULT_VIEW, Source
 
     eid = "d23a44ef-1402-4ed7-97f5-47e9a7a504d9"
     try:
@@ -316,10 +316,10 @@ def test_the_trial_view_on_a_phy_folder(tmp_path):
 def test_the_trial_view_on_real_data(tmp_path):
     import json
 
-    from neurodecoder.data.load import load_data_config, load_session
-    from neurodecoder.qc.units import load_qc_config
-    from neurodecoder.studio.export import export_view
-    from neurodecoder.studio.project import DEFAULT_VIEW, Source
+    from unitwave.data.load import load_data_config, load_session
+    from unitwave.qc.units import load_qc_config
+    from unitwave.studio.export import export_view
+    from unitwave.studio.project import DEFAULT_VIEW, Source
 
     eid = "d23a44ef-1402-4ed7-97f5-47e9a7a504d9"
     try:
@@ -349,7 +349,7 @@ def test_the_trial_view_on_real_data(tmp_path):
 
 
 def test_the_quality_panel_on_a_phy_folder(tmp_path):
-    from neurodecoder.studio.project import Source
+    from unitwave.studio.project import Source
 
     studio = _studio(tmp_path)  # no templates in the folder
     studio.source = Source(
@@ -369,11 +369,11 @@ def test_the_quality_panel_on_a_phy_folder(tmp_path):
 
 
 def test_the_quality_panel_on_real_data():
-    from neurodecoder.data.cluster_files import ibl_session_folder
-    from neurodecoder.data.load import load_data_config, load_session
-    from neurodecoder.data.manifest import MANIFEST_VERSION, read_manifest
-    from neurodecoder.qc.units import load_qc_config
-    from neurodecoder.studio.project import Source
+    from unitwave.data.cluster_files import ibl_session_folder
+    from unitwave.data.load import load_data_config, load_session
+    from unitwave.data.manifest import MANIFEST_VERSION, read_manifest
+    from unitwave.qc.units import load_qc_config
+    from unitwave.studio.project import Source
 
     eid = "d23a44ef-1402-4ed7-97f5-47e9a7a504d9"
     data = load_data_config()
@@ -418,8 +418,8 @@ def test_pairs_and_connections_on_a_phy_folder(tmp_path):
 
 
 def test_a_real_monosynaptic_peak_shows_in_the_corrected_correlogram():
-    from neurodecoder.data.load import load_data_config, load_session
-    from neurodecoder.qc.units import load_qc_config
+    from unitwave.data.load import load_data_config, load_session
+    from unitwave.qc.units import load_qc_config
 
     try:
         session = load_session("d23a44ef-1402-4ed7-97f5-47e9a7a504d9", "bwm")

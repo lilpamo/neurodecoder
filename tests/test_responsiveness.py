@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 from scipy.stats import kstest
 
-from neurodecoder.analysis.psth import alternate_halves
-from neurodecoder.analysis.responsiveness import (
+from unitwave.analysis.psth import alternate_halves
+from unitwave.analysis.responsiveness import (
     ResponseConfig,
     benjamini_hochberg,
     circular_statistics,

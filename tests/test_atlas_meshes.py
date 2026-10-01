@@ -1,6 +1,6 @@
 import pytest
 
-from neurodecoder.data.atlas_meshes import MESH_URL, mesh_path
+from unitwave.data.atlas_meshes import MESH_URL, mesh_path
 
 OBJ = b"# test mesh\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"
 

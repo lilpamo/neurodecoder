@@ -1,4 +1,4 @@
-# Responsiveness test (neurodecoder/analysis/responsiveness.py; docs/DECISIONS.md,
+# Responsiveness test (unitwave/analysis/responsiveness.py; docs/DECISIONS.md,
 # 2026-09-30). Windows are seconds relative to the event, half-open [start, stop).
 
 # Statistic: mean over trials of (response rate - baseline rate), two-sided.

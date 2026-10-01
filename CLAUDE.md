@@ -42,7 +42,7 @@ These are enforced by tests. Do not weaken a test to make code pass; fix the cod
 or escalate in chat.
 
 **R1 — No split without a registry.** Every train/val/test partition is produced
-by `neurodecoder.splits` and serialized to a split file with a hash. Models never
+by `unitwave.splits` and serialized to a split file with a hash. Models never
 receive raw session lists. See `docs/SPLITS_AND_LEAKAGE.md`.
 
 **R2 — No random time-point splits.** Ever. Not for a quick check, not for a
@@ -133,8 +133,8 @@ NWB / ONE  →  deterministic preprocessing  →  trained model  →  numbers on
                                                         prose, plots, report
 ```
 
-The agent layer (`neurodecoder/agent/`) may only read artifacts produced by
-`neurodecoder/models/` and `neurodecoder/evaluation/`. It has no access to raw
+The agent layer (`unitwave/agent/`) may only read artifacts produced by
+`unitwave/models/` and `unitwave/evaluation/`. It has no access to raw
 data and no numerical tools that could produce a prediction.
 
 Every number appearing in a generated report must be traceable to a field in
@@ -158,7 +158,7 @@ every numeral appears in the source artifacts. Do not disable it.
 - Write down failed experiments in `docs/NEGATIVE_RESULTS.md`. They are the most
   valuable thing in this repo and the easiest to lose.
 - The UI computes nothing itself. It loads through `data/` and `qc/`, gets every
-  number from `neurodecoder/analysis/` and draws through `viz/`. Every analysis is
+  number from `unitwave/analysis/` and draws through `viz/`. Every analysis is
   also callable without the UI. Errors and refusals are written for
   non-programmers.
 
@@ -194,7 +194,7 @@ experiment tracking for one person. Revisit at Phase 9.
 ## 9. Repository layout
 
 ```
-neurodecoder/
+unitwave/
   data/            session manifest, ONE + DANDI access, caching
   nwb/             intake, schema probe, capability report
   qc/              unit filtering, session-level QC
@@ -212,6 +212,7 @@ neurodecoder/
   viz/             plots
   agent/           report generation  [LLM boundary — see §6]  [PARKED]
   cli/
+  env.py           UNITWAVE_* environment variables (old NEURODECODER_* still read)
 configs/
 docs/
 tests/

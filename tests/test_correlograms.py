@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 from scipy.stats import kstest
 
-from neurodecoder.analysis.correlograms import (
+from unitwave.analysis.correlograms import (
     CorrelogramConfig,
     close_pairs,
     connections,

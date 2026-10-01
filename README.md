@@ -18,21 +18,22 @@ Python 3.11, from the repository folder:
 
 ```
 python3.11 -m venv .venv && .venv/bin/pip install -e .
-.venv/bin/python -m neurodecoder.studio.server
+.venv/bin/python -m unitwave.studio.server
 ```
 
 Then open http://127.0.0.1:8765/ and choose data on the homepage. To skip the
 homepage:
 
 ```
-.venv/bin/python -m neurodecoder.studio.server --eid <IBL session id>
-.venv/bin/python -m neurodecoder.studio.server --phy <Phy folder> --events events.csv
-.venv/bin/python -m neurodecoder.studio.server --project <name>.unitwave.json
+.venv/bin/python -m unitwave.studio.server --eid <IBL session id>
+.venv/bin/python -m unitwave.studio.server --phy <Phy folder> --events events.csv
+.venv/bin/python -m unitwave.studio.server --project <name>.unitwave.json
 ```
 
-Data lives under `data_root` in `configs/data.yaml`; the `NEURODECODER_DATA_ROOT`
-environment variable overrides it. The Python package is still `neurodecoder`;
-renaming it is the next step.
+Data lives under `data_root` in `configs/data.yaml` (by default
+`~/data/neurodecoder`, the folder's name from before the rename); the
+`UNITWAVE_DATA_ROOT` environment variable overrides it. The old name
+`NEURODECODER_DATA_ROOT` still works, with a deprecation warning.
 
 ## Documents
 

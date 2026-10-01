@@ -1,4 +1,4 @@
-# Cross-correlograms and putative connections (neurodecoder/analysis/correlograms.py;
+# Cross-correlograms and putative connections (unitwave/analysis/correlograms.py;
 # docs/DECISIONS.md, 2026-10-01).
 
 # Correlogram display: lags -window_s to +window_s, bins of bin_s centred on 0.

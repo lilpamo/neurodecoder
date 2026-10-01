@@ -1,17 +1,17 @@
 import dataclasses
 import json
-import os
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from neurodecoder.data.manifest import Manifest, manifest_versions
-from neurodecoder.preprocess.binning import PreprocConfig
-from neurodecoder.qc.units import UnitQC
-from neurodecoder.splits.guards import assert_split_valid
-from neurodecoder.splits.registry import (
+from unitwave.data.manifest import Manifest, manifest_versions
+from unitwave.env import env
+from unitwave.preprocess.binning import PreprocConfig
+from unitwave.qc.units import UnitQC
+from unitwave.splits.guards import assert_split_valid
+from unitwave.splits.registry import (
     Split,
     held_out_groups,
     held_out_session,
@@ -256,7 +256,7 @@ def test_a_saved_split_is_never_replaced(tmp_path):
         save_split(_animals(seed=1), path)
 
 
-DATA_ROOT = Path(os.environ.get("NEURODECODER_DATA_ROOT", "~/data/neurodecoder")).expanduser()
+DATA_ROOT = Path(env("DATA_ROOT", "~/data/neurodecoder")).expanduser()
 EPHYS = DATA_ROOT / "bwm_compressed/bwm_ephys/1.2.1"
 BEHAVIOUR = DATA_ROOT / "bwm_compressed/bwm_behavior/2.0.0"
 needs_bwm = pytest.mark.skipif(
@@ -266,7 +266,7 @@ needs_bwm = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def manifest():
-    from neurodecoder.data.manifest import build_manifest
+    from unitwave.data.manifest import build_manifest
 
     return build_manifest(EPHYS, BEHAVIOUR)
 

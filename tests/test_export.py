@@ -4,12 +4,12 @@ import numpy as np
 import pandas as pd
 from phy_folder import write_phy_folder
 
-from neurodecoder.analysis.events import event_times
-from neurodecoder.analysis.psth import alternate_halves, population_psth, psth
-from neurodecoder.analysis.responsiveness import ResponseConfig
-from neurodecoder.studio.export import export_view
-from neurodecoder.studio.project import DEFAULT_VIEW, Source, load_source
-from neurodecoder.studio.server import Studio
+from unitwave.analysis.events import event_times
+from unitwave.analysis.psth import alternate_halves, population_psth, psth
+from unitwave.analysis.responsiveness import ResponseConfig
+from unitwave.studio.export import export_view
+from unitwave.studio.project import DEFAULT_VIEW, Source, load_source
+from unitwave.studio.server import Studio
 
 SAMPLES = [30, 60, 90, 150, 30000, 45000, 60000, 90000]
 CLUSTERS = [3, 7, 3, 7, 3, 11, 9, 7]

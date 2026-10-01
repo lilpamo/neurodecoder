@@ -5,9 +5,9 @@ import pandas as pd
 import pytest
 from phy_folder import write_phy_folder
 
-from neurodecoder.analysis.events import event_times
-from neurodecoder.analysis.psth import psth
-from neurodecoder.studio.project import (
+from unitwave.analysis.events import event_times
+from unitwave.analysis.psth import psth
+from unitwave.studio.project import (
     DEFAULT_VIEW,
     Source,
     load_source,
@@ -108,7 +108,7 @@ def test_refuses_unknown_view_keys_and_newer_versions(tmp_path):
 
 
 def test_older_projects_without_a_probe_open_on_all_probes(tmp_path):
-    from neurodecoder.studio.server import Studio
+    from unitwave.studio.server import Studio
 
     _, _, path = _saved(tmp_path)
     saved = json.loads(path.read_text())
@@ -184,7 +184,7 @@ def test_exports_send_the_views_trial_filters_as_the_page_does():
 
 
 def test_an_old_ending_project_opens_and_saves_beside_itself(tmp_path):
-    from neurodecoder.studio.server import Studio
+    from unitwave.studio.server import Studio
 
     source, session, path = _saved(tmp_path)
     old = path.rename(tmp_path / "study.ndstudio.json")  # saved before the rename

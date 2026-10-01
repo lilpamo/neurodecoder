@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from neurodecoder.analysis.conditions import (
+from unitwave.analysis.conditions import (
     TrialFilter,
     apply_trial_filter,
     available_conditions,
@@ -12,7 +12,7 @@ from neurodecoder.analysis.conditions import (
     split_event_times,
     stimulus_side,
 )
-from neurodecoder.analysis.events import trial_event_times
+from unitwave.analysis.events import trial_event_times
 
 NAN = np.nan
 # IBL's convention: the side without a stimulus is NaN; zero contrast is 0 on the
