@@ -114,6 +114,26 @@
         <p class="err" id="popErr"></p>
       </section>
 
+      <section class="card area-trial">
+        <header><h3>Trial</h3><span class="meta" id="trialPlace"></span></header>
+        <div class="trialbar">
+          <button class="btn sm" id="trialPrev" title="Previous trial (←)" disabled>‹ Previous</button>
+          <label>Trial <input type="number" id="trialNo" min="0" step="1" title="0-based row of the trials table"></label>
+          <button class="btn sm" id="trialNext" title="Next trial (→)" disabled>Next ›</button>
+          <label class="check" title="Otherwise previous/next skip trials the trial filters exclude"><input type="checkbox" id="trialAll"> All trials</label>
+          <label>Zero at <select id="trialAlign"></select></label>
+          <label>Pads <input type="number" id="trialPre" step="0.1" min="0"> s before, <input type="number" id="trialPost" step="0.1" min="0"> s after</label>
+          <label class="check"><input type="checkbox" id="trialNeighbours"> Neighbouring trials:</label>
+          <label><input type="number" id="trialN" min="1" step="1"> shown</label>
+          <span class="traces" id="trialTraces"></span>
+        </div>
+        <div class="trialhead" id="trialHead"></div>
+        <p class="caption" id="trialCaption"></p>
+        <p class="note" id="trialEmpty">Choose a trial: click a row of the selected unit's raster, or type a trial number.</p>
+        <div class="popwrap"><img id="trialImg" alt="Every shown unit's spikes in this trial, with task events and behaviour" hidden><div class="tip" id="trialTip" hidden></div></div>
+        <p class="err" id="trialErr"></p>
+      </section>
+
       <section class="card area-brain">
         <header><h3>Brain</h3><span class="meta" id="brainMeta"></span></header>
         <div class="brainrow">

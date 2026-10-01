@@ -5,6 +5,8 @@ Each export is a new `runs/<run_id>/` folder (run_id = UTC time + "_studio"):
 - `population.svg`, `population.pdf`, `population.json`: the heatmap and mean;
 - `wheel.svg`, `wheel.pdf`, `wheel.json`: wheel speed on the same trials, when the
   session has a wheel;
+- `trial.svg`, `trial.pdf`, `trial.json`: the single-trial view, when a trial is
+  chosen, with every spike time and event time it plots;
 - `responsiveness.csv`, when the test was run for this event (on all trials or on
   movement-free trials only, as the view says);
 - `selectivity.csv` and `movement_locking.csv`, when those tests were run;
@@ -32,6 +34,7 @@ import numpy as np
 from neurodecoder.studio.project import REPO, make_project, view_to_query
 from neurodecoder.viz.studio_plots import (
     build_population_figure,
+    build_trial_figure,
     build_tuning_figure,
     build_unit_figure,
     build_wheel_figure,
@@ -183,6 +186,45 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
             },
         )
         files += ["wheel.svg", "wheel.pdf", "wheel.json"]
+
+    if view.get("trial") is not None:
+        t = studio.trial_data(q)
+        v = t["view"]
+        fig, _ = build_trial_figure(
+            v, t["regions"], t["region_colours"], view.get("unit"), THEME, t["caption"]
+        )
+        for suffix in ("svg", "pdf"):
+            save_vector(fig, out / f"trial.{suffix}")
+        _write_json(
+            out / "trial.json",
+            {
+                "caption": t["caption"],
+                "trials": studio._trial_summary(q),
+                "header": v.header,
+                "window": {
+                    "trials": list(v.window.trials),
+                    "trial": v.window.trial,
+                    "zero": v.window.align,
+                    "zero_s": v.window.zero_s,
+                    "start_rel_s": v.window.start_rel_s,
+                    "stop_rel_s": v.window.stop_rel_s,
+                },
+                "times": "seconds relative to zero_s (session clock)",
+                "rows": [
+                    {"unit": u, "probe": p, "region": r, "spikes_s": x}
+                    for u, p, r, x in zip(v.rows, v.probes, t["regions"], v.spikes)
+                ],
+                "events": v.events,
+                "not_recorded": v.not_recorded,
+                "absent_events": v.absent_events,
+                "boundaries": v.boundaries,
+                "wheel": v.wheel,
+                "wheel_missing": v.wheel_missing,
+                "traces": {k: {"t_s": x, "values": y} for k, (x, y) in v.traces.items()},
+                "traces_missing": v.traces_missing,
+            },
+        )
+        files += ["trial.svg", "trial.pdf", "trial.json"]
 
     tested = studio._tested(q)
     if tested is not None:

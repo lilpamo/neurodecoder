@@ -51,7 +51,7 @@ from neurodecoder.analysis.conditions import (
     condition,
     split_event_times,
 )
-from neurodecoder.analysis.events import EVENTS, available_events, event_times
+from neurodecoder.analysis.events import EVENTS, available_events, event_times, trial_event_times
 from neurodecoder.analysis.movement import (
     load_movement_config,
     movement_free,
@@ -69,6 +69,17 @@ from neurodecoder.analysis.psth import (
     selection_average,
 )
 from neurodecoder.analysis.responsiveness import load_response_config, responsiveness
+from neurodecoder.analysis.trial_view import (
+    EVENT_COLUMNS,
+    NUMBERING,
+    TRACES,
+    TRIAL_START,
+    alignment_label,
+    load_trial_view_config,
+    position,
+    step,
+    trial_view,
+)
 from neurodecoder.analysis.tuning import (
     COMPARISONS,
     load_selectivity_config,
@@ -104,6 +115,7 @@ from neurodecoder.viz.studio_plots import (
     lab_colours,
     population_figure,
     probe_colours,
+    trial_figure,
     tuning_figure,
     unit_figure,
     wheel_figure,
@@ -148,6 +160,7 @@ class Studio:
         self.response_cfg = load_response_config()
         self.selectivity_cfg = load_selectivity_config()
         self.movement_cfg = load_movement_config()
+        self.trial_cfg = load_trial_view_config()
         # (all units, probe, trial filter) -> movement-locking result: BH over that set.
         self._locking: dict[tuple, pd.DataFrame] = {}
         # (event, condition, all units, probe, trial filter) -> result: BH over that set.
@@ -248,6 +261,28 @@ class Studio:
                     list(self.movement_cfg.pre_window),
                     list(self.movement_cfg.post_window),
                 ],
+            },
+            "trial_view": {
+                "numbering": NUMBERING,
+                "alignments": {
+                    TRIAL_START: "Trial start",
+                    **{
+                        c: alignment_label(c).capitalize()
+                        for c in EVENT_COLUMNS
+                        if c in self.session.trials
+                    },
+                },
+                "pre_pad_s": self.trial_cfg.pre_pad_s,
+                "post_pad_s": self.trial_cfg.post_pad_s,
+                "n_trials": self.trial_cfg.n_trials,
+                "max_trials": self.trial_cfg.max_trials,
+                "traces": {
+                    name: {
+                        "available": name in self.session.behaviour,
+                        "reason": missing.get(f"behaviour.{name}", ""),
+                    }
+                    for name in TRACES
+                },
             },
             "project": {
                 "path": None if self.project_path is None else str(self.project_path),
@@ -514,9 +549,12 @@ class Studio:
             cond = condition(trials, split)
             colours = condition_colours(split, cond.levels, q.get("theme", "light"))
             groups = []
+            raster_trials = []
             for part, colour in zip(split_event_times(trials, q["event"], cond), colours):
                 if not np.isfinite(part.times).any():
                     continue  # e.g. error trials when aligned to reward feedback
+                rows = trials.index[cond.values == part.level][np.isfinite(part.times)]
+                raster_trials += self._trial_numbers(rows)
                 trial, rel = raster(spikes, part.times, window)
                 p = psth(spikes, part.times, window, bin_width, baseline)
                 groups.append(TraceGroup(part.name, colour, p, trial, rel))
@@ -530,12 +568,25 @@ class Studio:
             p = psth(spikes, events, window, bin_width, baseline)
             trial, rel = raster(spikes, events, window)
             groups = [TraceGroup("all trials", None, p, trial, rel)]
+            rows = trials.index[np.isfinite(trial_event_times(trials, q["event"]))]
+            raster_trials = self._trial_numbers(rows)
             caption = (
                 f"{q['unit']}{where} · {EVENTS[q['event']][0]} · n = {p.n_trials} trials"
                 + (f", {p.n_excluded} without this event excluded" if p.n_excluded else "")
                 + note
             )
-        return {"groups": groups, "window": window, "baseline": baseline, "caption": caption}
+        assert len(raster_trials) == sum(g.psth.n_trials for g in groups)
+        return {
+            "groups": groups,
+            "window": window,
+            "baseline": baseline,
+            "caption": caption,
+            "raster_trials": raster_trials,
+        }
+
+    def _trial_numbers(self, rows: pd.Index) -> list[int]:
+        """Trials-table row labels -> trial numbers (0-based rows of the session's table)."""
+        return self.session.trials.index.get_indexer(rows).tolist()
 
     def tuning_data(self, q: dict) -> dict:
         """Mean ± SEM response rate per level of the split condition, with n per level."""
@@ -571,8 +622,95 @@ class Studio:
     def unit_png(self, q: dict) -> tuple[bytes, dict]:
         d = self.unit_data(q)
         theme = q.get("theme", "light")
-        png = unit_figure(d["groups"], d["window"], d["baseline"] is not None, theme)
-        return png, {"X-Caption": quote(d["caption"])}
+        png, box = unit_figure(d["groups"], d["window"], d["baseline"] is not None, theme)
+        return png, {
+            "X-Caption": quote(d["caption"]),
+            "X-Trials": ",".join(map(str, d["raster_trials"])),
+            "X-Box": ",".join(f"{v:.4f}" for v in box),
+        }
+
+    def _trial_args(self, q: dict) -> dict:
+        """The trial view's settings from a request; defaults from configs/trial_view.yaml."""
+        cfg = self.trial_cfg
+        if q.get("trial") in (None, ""):
+            raise ValueError("choose a trial")
+        try:
+            trial, n_trials = int(q["trial"]), int(q.get("trial_n", 1))
+        except ValueError:
+            raise ValueError("the trial and the number of trials must be whole numbers") from None
+        return {
+            "trial": trial,
+            "n_trials": n_trials,
+            "align": q.get("trial_align", TRIAL_START),
+            "pre": float(q.get("trial_pre_s", cfg.pre_pad_s)),
+            "post": float(q.get("trial_post_s", cfg.post_pad_s)),
+            "traces": tuple(t for t in q.get("trial_traces", "").split(",") if t),
+        }
+
+    def trial_data(self, q: dict) -> dict:
+        """Every number the single-trial figure plots (analysis.trial_view), its caption,
+        and each row's region at the current level."""
+        ids = self._select(q)
+        if not ids:
+            raise ValueError("no units match this filter")
+        keep = self._trials(q)[1].mask
+        args = self._trial_args(q)
+        view = trial_view(self.session, self.units.loc[ids], cfg=self.trial_cfg, keep=keep, **args)
+        regions = [None if pd.isna(r) else r for r in self._regions(q)[view.rows]]
+        info = region_info({r for r in regions if r}) if self.has_regions else {}
+        included = sorted(set(view.probes))
+        shown = view.window.trials
+        which = "responsive " if q.get("responsive") == "1" else ""
+        caption = (
+            f"Single trial, descriptive (no test) · trial {view.window.trial} (0-based) · "
+            f"{len(view.rows)} {which}units ({q.get('node') or 'all regions'}) · "
+            f"{'probe' if len(included) == 1 else 'probes'} {', '.join(included)} · "
+            f"zero at {alignment_label(view.window.align)}"
+            + (f" · trials {shown[0]} to {shown[-1]}" if len(shown) > 1 else "")
+            + f" · pads {args['pre']:g} s before, {args['post']:g} s after"
+        )
+        return {
+            "view": view,
+            "regions": regions,  # (n_rows,) region at the current level, None if none
+            "region_colours": {r: i["colour"] for r, i in info.items()},
+            "caption": caption,
+        }
+
+    def trial_json(self, q: dict) -> dict:
+        """The trial's header, what is not drawn and why, and where next/previous go."""
+        d = self.trial_data(q)
+        view, keep = d["view"], self._trials(q)[1].mask
+        filtered = q.get("trial_all") != "1"
+        k = view.window.trial
+        place, n = position(keep, k, filtered)
+        return {
+            "header": view.header,
+            "trials": list(view.window.trials),
+            "boundaries": view.boundaries,
+            "not_recorded": view.not_recorded,
+            "absent_events": view.absent_events,
+            "wheel_missing": view.wheel_missing,
+            "traces_missing": view.traces_missing,
+            "caption": d["caption"],
+            "place": place,
+            "n": n,
+            "filtered": filtered,
+            "previous": step(keep, k, -1, filtered),
+            "next": step(keep, k, +1, filtered),
+            "n_total": len(keep),
+        }
+
+    def trial_png(self, q: dict) -> tuple[bytes, dict]:
+        d = self.trial_data(q)
+        view = d["view"]
+        png, box = trial_figure(
+            view, d["regions"], d["region_colours"], q.get("unit"), q.get("theme", "light")
+        )
+        return png, {
+            "X-Caption": quote(d["caption"]),
+            "X-Rows": ",".join(view.rows),
+            "X-Box": ",".join(f"{v:.4f}" for v in box),
+        }
 
     def population_data(self, q: dict) -> dict:
         """Every number the population figure plots, rows in plotted order, and its caption."""
@@ -853,6 +991,8 @@ _SESSION_ROUTES = {
     "/api/selectivity": ("application/json", "selectivity_json"),
     "/api/locking": ("application/json", "locking_json"),
     "/api/wheel.png": ("image/png", "wheel_png"),
+    "/api/trial": ("application/json", "trial_json"),
+    "/api/trial.png": ("image/png", "trial_png"),
     "/api/tuning.png": ("image/png", "tuning_png"),
     "/api/unit.png": ("image/png", "unit_png"),
     "/api/population.png": ("image/png", "population_png"),

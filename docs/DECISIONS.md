@@ -6,6 +6,76 @@ first.
 
 ---
 
+### 2026-10-01 — Single-trial view (`analysis/trial_view.py`, `configs/trial_view.yaml`)
+
+**What (the user's step 6b):** every shown unit's spikes in one trial, or a few
+consecutive trials, with the task events and behaviour on the same time axis. It is
+descriptive: no statistic, no null, no label, and the caption says so.
+- **Rows:** the unit table's filters (QC, probe, region node, responsive only),
+  grouped by probe with a separator, the most superficial unit on top. Region bands
+  at the current level, and the selected unit marked.
+- **Window:** the trial's start minus a pre-pad to its end plus a post-pad,
+  half-open. Zero is the trial start or a chosen event.
+- **Events:** every event column the trials table has, with one legend. A missing
+  event is listed as "not recorded on trial k" in the header and the figure, and
+  not drawn. Aligning to it is refused.
+- **Header:** trial number, stimulus, choice, outcome, block, reaction time,
+  `bwm_include`, and whether it passes the current trial filters.
+- **Behaviour:** wheel position and speed, plus optional motion energy and pupil
+  traces. A missing signal is disabled with its reason.
+- **Navigation:** previous/next, arrow keys and a trial box. They step through the
+  filtered trials, or all trials with a toggle, showing "trial k of n filtered
+  trials". Clicking a raster row selects the unit. Clicking a row of the unit's
+  event-aligned raster opens that trial (the server sends each row's trial, as it
+  sends the heatmap's units).
+- **Saved and exported:** the trial, alignment, pads, number of trials, the
+  all-trials toggle and the traces are saved in the project. Export writes
+  `trial.svg/.pdf/.json`, with every spike and event time plotted.
+
+**Choices, flagged for review:**
+1. **Matplotlib PNGs, no client-side renderer.** Hovering a row names the unit,
+   and the exact spike times are in the export's JSON. Hover on single spikes
+   didn't seem worth a new dependency, so I didn't ask.
+2. **Trial numbers are the 0-based row of the trials table**, stated in the
+   header. On d23a44ef that equals IBL's `trial_id`.
+3. **Neighbouring trials are centred on the current trial,** consecutive in the
+   table whether or not they pass the filters. Each is marked when it fails them.
+   N is 3 when the option is on, at most 9 (`configs/trial_view.yaml`).
+4. **Wheel position is plotted relative to its value at zero.** The raw position
+   is cumulative over the session.
+5. **Wheel speed** uses `movement.binned_wheel_speed`, now shared with the
+   wheel-speed PSTH, on 20 ms bins tiled from the zero. A test checks a trial's
+   trace equals its row of that computation.
+6. **Overlapping events:** in IBL the go cue comes within ~1 ms of stimulus onset,
+   and feedback within ~1 ms of the response. Go cue and response are drawn wider
+   underneath as a halo, so both lines show at their true times.
+7. **Event colours** are the categorical slots in task order. Feedback keeps one
+   hue: reward solid, error dotted.
+
+**A bug found and fixed (from step 4b part (a), 3881fe1):** exports ignored the
+view's trial filters.
+- `view_to_query` sent them under `trials`, but the server reads `tf`, so exported
+  figures were computed on every trial while the page used the filter.
+- The sidecars recorded what was used (no filter), so no file is internally wrong,
+  but exports made with a filter don't match the page and should be redone.
+- Now fixed, with a test, and the real-data export test checks 290 kept trials.
+
+**Also:**
+- `conditions._NAMES` is public as `LEVEL_NAMES`, so the header names levels as
+  the splits do.
+- Projects hash `configs/trial_view.yaml`.
+- A bad trial number gets a plain refusal.
+
+**Real data:**
+- **Speed:** on d23a44ef (390 units), the engine takes ~0.1 s per trial and the
+  figure ~0.6 s.
+- **Missing events:** d23a44ef has none. Of the 26 cached sessions on the current
+  loader, 24 have trials with a missing event, mostly first movement. On 9fe512b8,
+  trial 236 has no first movement or feedback time, yet the wheel turns ~0.6 s
+  after stimulus onset. The view shows the wheel and draws no movement line.
+
+**No new dependency.**
+
 ### 2026-09-30 — Movement controls (`analysis/movement.py`, `configs/movement.yaml`)
 
 **What (the user's step 6):**

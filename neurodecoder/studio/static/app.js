@@ -5,7 +5,8 @@ import { OrbitControls } from '/static/vendor/three/OrbitControls.js';
 import { OBJLoader } from '/static/vendor/three/OBJLoader.js';
 
 const $ = (id) => document.getElementById(id);
-const state = { session: null, level: null, node: '', all: false, responsive: false, movementFree: false, probe: '', split: '', trials: {}, unit: null, rows: [], tree: [], popRows: null, box: null };
+const state = { session: null, level: null, node: '', all: false, responsive: false, movementFree: false, probe: '', split: '', trials: {}, unit: null, rows: [], tree: [], popRows: null, box: null,
+  trial: null, trialNav: null, trialRows: null, trialBox: null, unitTrials: null, unitBox: null };
 
 // ---------- helpers ----------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -47,7 +48,7 @@ function setTheme(v) {
 function redrawForTheme() {
   if (!state.session) return;  // nothing drawn yet
   renderProbes();
-  plotUnit(); plotPop(); renderProbe(); brain.theme();
+  plotUnit(); plotPop(); plotTrial(); renderProbe(); brain.theme();
 }
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (!document.documentElement.dataset.theme) redrawForTheme();
@@ -77,6 +78,7 @@ async function init() {
   state.movementFree = Boolean(v.movement_free) && s.movement.first_movement;
   $('movementFree').checked = state.movementFree;
   renderTrialFilters();
+  renderTrialControls(v);
   $('split').value = state.split;
   renderProbes();
   state.level = noRegion ? null : (s.levels.includes(v.level) ? v.level : s.default_level);
@@ -117,6 +119,9 @@ function currentView() {
     level: state.level || state.session.default_level, node: state.node,
     all: state.all, responsive: state.responsive, unit: state.unit, probe: state.probe, split: state.split,
     trials: state.trials, movement_free: state.movementFree,
+    trial: state.trial, trial_align: $('trialAlign').value, trial_pre_s: +$('trialPre').value,
+    trial_post_s: +$('trialPost').value, trial_n: trialCount(), trial_all: $('trialAll').checked,
+    trial_traces: trialTraces(),
   };
 }
 async function post(url, body) {
@@ -359,12 +364,13 @@ function selectUnit(id, { scroll = true } = {}) {
   for (const tr of $('rows').querySelectorAll('tr')) tr.setAttribute('aria-selected', tr.dataset.id === id);
   if (scroll && id) $('rows').querySelector(`tr[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' });
   plotUnit();
+  plotTrial();
   renderProbe();
   brain.select(id);
 }
 
 // ---------- plots (PNGs from viz/) ----------
-const latest = { unit: 0, pop: 0, tuning: 0, wheel: 0 };
+const latest = { unit: 0, pop: 0, tuning: 0, wheel: 0, trial: 0 };
 async function fetchPlot(kind, url, img, caption, err) {
   const seq = ++latest[kind];
   const r = await fetch(url);
@@ -380,10 +386,15 @@ async function fetchPlot(kind, url, img, caption, err) {
   img.src = URL.createObjectURL(await r.blob());
   return r.headers;
 }
-function plotUnit() {
-  if (state.unit) fetchPlot('unit', '/api/unit.png?' + params({ unit: state.unit }), $('unitImg'), $('unitCaption'), $('unitErr'));
+async function plotUnit() {
   plotWheel();
   plotTuning();
+  if (!state.unit) return;
+  const h = await fetchPlot('unit', '/api/unit.png?' + params({ unit: state.unit }), $('unitImg'), $('unitCaption'), $('unitErr'));
+  if (h) {
+    state.unitTrials = h.get('X-Trials').split(',').map(Number);
+    state.unitBox = h.get('X-Box').split(',').map(Number);
+  }
 }
 // The wheel is the same for every unit: fetch it only when the event, window, bins or
 // trials change. Without a wheel, say why instead of drawing an empty panel.
@@ -413,15 +424,108 @@ async function plotPop() {
     state.box = h.get('X-Box').split(',').map(Number);
   }
 }
-function popRowAt(e) {
-  const b = state.box;
-  if (!b || !state.popRows) return null;
-  const rect = $('popImg').getBoundingClientRect();
+// A click or hover on a figure's rows -> the row's entry, from the server's row list
+// and the rows' box (left, top, right, bottom, as fractions of the image).
+function rowAt(img, rows, b, e) {
+  if (!b || !rows) return null;
+  const rect = img.getBoundingClientRect();
   const fx = (e.clientX - rect.left) / rect.width;
   const fy = (e.clientY - rect.top) / rect.height;
   if (fx < b[0] || fx > b[2] || fy < b[1] || fy >= b[3]) return null;
-  const i = Math.floor(((fy - b[1]) / (b[3] - b[1])) * state.popRows.length);
-  return { id: state.popRows[i], x: e.clientX - rect.left, y: e.clientY - rect.top };
+  const i = Math.floor(((fy - b[1]) / (b[3] - b[1])) * rows.length);
+  return { id: rows[i], x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+const popRowAt = (e) => rowAt($('popImg'), state.popRows, state.box, e);
+
+// ---------- single trial ----------
+// Every number comes from /api/trial (header, navigation) and /api/trial.png (figure).
+function renderTrialControls(v) {
+  const tv = state.session.trial_view;
+  for (const [k, label] of Object.entries(tv.alignments)) $('trialAlign').add(new Option(label, k));
+  $('trialAlign').value = tv.alignments[v.trial_align] ? v.trial_align : 'trial_start';
+  $('trialPre').value = v.trial_pre_s;
+  $('trialPost').value = v.trial_post_s;
+  $('trialAll').checked = v.trial_all;
+  $('trialN').max = tv.max_trials;
+  $('trialNeighbours').checked = v.trial_n > 1;
+  $('trialN').value = v.trial_n > 1 ? v.trial_n : tv.n_trials;
+  $('trialTraces').innerHTML = Object.entries(tv.traces).map(([name, t]) =>
+    `<label class="check ${t.available ? '' : 'off'}" title="${esc(t.available ? '' : t.reason)}">` +
+    `<input type="checkbox" value="${name}" ${t.available ? '' : 'disabled'} ${t.available && (v.trial_traces || []).includes(name) ? 'checked' : ''}> ` +
+    `${esc(name.replace(/_/g, ' '))}</label>`).join('');
+  state.trial = v.trial;
+  $('trialNo').value = v.trial ?? '';
+  $('trialNo').max = state.session.n_trials - 1;
+}
+const trialCount = () => ($('trialNeighbours').checked ? +$('trialN').value : 1);
+const trialTraces = () => [...$('trialTraces').querySelectorAll('input:checked')].map((i) => i.value);
+function trialParams() {
+  return params({
+    unit: state.unit || '', trial: state.trial, trial_align: $('trialAlign').value,
+    trial_pre_s: $('trialPre').value, trial_post_s: $('trialPost').value, trial_n: trialCount(),
+    trial_all: $('trialAll').checked ? 1 : 0, trial_traces: trialTraces().join(','),
+  });
+}
+const pct = (c) => (c === 0 ? '0%' : `${c > 0 ? '+' : '−'}${Math.abs(c * 100)}%`);
+function renderTrialHead(d) {
+  const h = d.header, none = '<span class="missing">not recorded</span>';
+  const chip = (label, value) => `<span class="chip">${label} <b>${value ?? none}</b></span>`;
+  const passes = h.passes_filter
+    ? '<span class="chip">passes the trial filters</span>'
+    : '<span class="chip fails">fails the trial filters</span>';
+  const lines = [
+    chip('Trial', `${h.trial}`) + `<span class="chip">${esc(h.numbering)}</span>`,
+    chip('stimulus', h.side == null ? null : `${h.side}, ${pct(h.signed_contrast)}`),
+    chip('choice', h.choice && esc(h.choice)),
+    chip('outcome', h.outcome),
+    chip('block p(left)', h.block),
+    chip('reaction time', h.reaction_time_s == null ? null : `${Math.round(h.reaction_time_s * 1000)} ms`),
+    chip('bwm_include', h.bwm_include == null ? null : (h.bwm_include ? 'yes' : 'no')),
+    passes,
+  ];
+  const byTrial = {};
+  for (const e of d.not_recorded) (byTrial[e.trial] ||= []).push(e.label);
+  for (const [k, labels] of Object.entries(byTrial)) lines.push(`<span class="gone">Not recorded on trial ${k} (not drawn): ${esc(labels.join(', '))}</span>`);
+  if (d.absent_events.length) lines.push(`<span class="gone">Not in this session's trials table: ${esc(d.absent_events.join(', '))}</span>`);
+  if (d.wheel_missing) lines.push(`<span class="gone">No wheel: ${esc(d.wheel_missing)}</span>`);
+  $('trialHead').innerHTML = lines.join('');
+  const scope = d.filtered ? 'filtered trials' : 'trials';
+  $('trialPlace').textContent = d.place == null
+    ? `trial ${h.trial} is not among the ${d.n} filtered trials`
+    : `trial ${d.place} of ${d.n} ${scope}`;
+  $('trialPrev').disabled = d.previous == null;
+  $('trialNext').disabled = d.next == null;
+}
+async function plotTrial() {
+  const empty = state.trial == null;
+  $('trialEmpty').hidden = !empty;
+  $('trialImg').hidden = empty;
+  if (empty) { $('trialHead').innerHTML = ''; $('trialCaption').textContent = ''; $('trialPlace').textContent = ''; return; }
+  $('trialNo').value = state.trial;
+  const q = trialParams();
+  try {
+    state.trialNav = await getJSON('/api/trial?' + q);
+    renderTrialHead(state.trialNav);
+  } catch (e) {
+    $('trialErr').textContent = e.message;
+    $('trialImg').style.opacity = 0.25;
+    return;
+  }
+  const h = await fetchPlot('trial', '/api/trial.png?' + q, $('trialImg'), $('trialCaption'), $('trialErr'));
+  if (h) {
+    state.trialRows = h.get('X-Rows').split(',');
+    state.trialBox = h.get('X-Box').split(',').map(Number);
+  }
+}
+function openTrial(k) {
+  if (k == null || Number.isNaN(k)) return;
+  state.trial = k;
+  plotTrial();
+}
+function stepTrial(direction) {
+  const nav = state.trialNav;
+  if (!nav) return;
+  openTrial(direction > 0 ? nav.next : nav.previous);
 }
 
 // ---------- probe strip ----------
@@ -661,6 +765,38 @@ $('popImg').addEventListener('mousemove', (e) => {
   tip.style.top = `${hit.y}px`;
 });
 $('popImg').addEventListener('mouseleave', () => { $('popTip').hidden = true; });
+$('trialImg').addEventListener('mousemove', (e) => {
+  const hit = rowAt($('trialImg'), state.trialRows, state.trialBox, e), tip = $('trialTip');
+  tip.hidden = !hit;
+  if (!hit) return;
+  const row = state.rows.find((u) => u.id === hit.id);
+  tip.textContent = row?.region_level ? `${hit.id} · ${row.region_level}` : hit.id;
+  tip.style.left = `${hit.x}px`;
+  tip.style.top = `${hit.y}px`;
+});
+$('trialImg').addEventListener('mouseleave', () => { $('trialTip').hidden = true; });
+$('trialImg').addEventListener('click', (e) => {
+  const hit = rowAt($('trialImg'), state.trialRows, state.trialBox, e);
+  if (hit) selectUnit(hit.id);
+});
+// A row of the selected unit's event-aligned raster is a trial: open it below.
+$('unitImg').addEventListener('click', (e) => {
+  const hit = rowAt($('unitImg'), state.unitTrials, state.unitBox, e);
+  if (!hit) return;
+  openTrial(hit.id);
+  $('trialImg').closest('.card').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+});
+$('trialPrev').addEventListener('click', () => stepTrial(-1));
+$('trialNext').addEventListener('click', () => stepTrial(+1));
+$('trialNo').addEventListener('change', () => openTrial($('trialNo').value === '' ? null : Math.trunc(+$('trialNo').value)));
+for (const id of ['trialAll', 'trialAlign', 'trialPre', 'trialPost', 'trialNeighbours', 'trialN', 'trialTraces']) {
+  $(id).addEventListener('change', plotTrial);
+}
+document.addEventListener('keydown', (e) => {
+  if (e.target.closest('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === 'ArrowLeft') { e.preventDefault(); stepTrial(-1); }
+  if (e.key === 'ArrowRight') { e.preventDefault(); stepTrial(+1); }
+});
 $('popImg').addEventListener('click', (e) => { const hit = popRowAt(e); if (hit) selectUnit(hit.id); });
 
 try { const t = localStorage.getItem('studio-theme'); if (t && t !== 'auto') setTheme(t); } catch { /* ignore */ }

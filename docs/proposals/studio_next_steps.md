@@ -185,7 +185,7 @@ names the file.
 - A changed spike file triggers the hash warning.
 - The exported sidecar equals the engine's output.
 
-## Further steps: 4b and 5–14 (each marked planned or built)
+## Further steps: 4b, 5–6, 6b and 7–14 (each marked planned or built)
 
 Each step says:
 - what it adds;
@@ -373,6 +373,61 @@ quiescence period.
   - not responsive in movement-free trials;
   - labelled movement-locked.
 - Null calibration on units with no locking.
+
+## 6b. Single-trial view — built (2026-10-01)
+
+Built (`docs/DECISIONS.md`, "Single-trial view").
+- **As planned:** everything below, with matplotlib PNGs (no client-side renderer).
+- **Neighbouring trials:** centred on the current trial, consecutive in the table,
+  each marked when it fails the filters. N is 3, at most 9.
+- **Wheel position:** relative to its value at zero.
+- **Overlapping events:** go cue and response are drawn as wider halos under
+  stimulus onset and feedback, which they overlap in IBL.
+- **Also fixed:** exports had ignored the view's trial filters since step 4b.
+
+**Adds:** every shown unit's spikes in one trial, with the task events on the same
+plot. The engine goes in `analysis/trial_view.py`.
+- **Population raster:** one row per shown unit, under the unit table's filters
+  (QC, probe, region node, responsive only). Rows are grouped by probe with a
+  separator and ordered by depth within each probe, with region colour bands at
+  the current level and the selected unit's row highlighted.
+- **Time axis:** from the trial's start (`intervals_0`) minus a pre-pad to its end
+  (`intervals_1`) plus a post-pad; pads in `configs/`. Zero is the trial start, or
+  a chosen event, and the caption says which.
+- **Events:** every task event the trials table has, as labelled lines with one
+  legend: stimulus on, go cue, first movement, response, feedback (reward and
+  error drawn differently), stimulus off. An event missing on this trial is listed
+  as "not recorded on this trial" and not drawn.
+- **Header:** the trial number (0- or 1-based, stated), stimulus side and signed
+  contrast, choice, outcome, block, reaction time, `bwm_include`, and whether the
+  trial passes the current trial filters.
+- **Behaviour, on the same time axis:** wheel position and speed, with the speed
+  computation shared with `wheel_speed_psth`. Motion energy and pupil are
+  optional traces. A missing signal is disabled with its reason.
+- **Neighbouring trials:** N consecutive trials in one plot, N capped in
+  `configs/`, with trial boundaries marked.
+- **Navigation:** previous/next buttons, arrow keys and a trial box. They step
+  through trials passing the trial filters, or all trials with a toggle, and show
+  "trial k of n (filtered)". Clicking a raster row selects that unit. Clicking a
+  trial in the selected unit's event-aligned raster opens that trial.
+- **Saved and exported:** the trial, alignment, pads and number of trials go in
+  the project file. Export writes SVG, PDF and a JSON sidecar with every spike
+  and event time plotted.
+
+**Null:** none. It is descriptive, with no labels, and the caption says so.
+
+**Phy data:** events come from the events CSV, so only its columns are drawn. Phy
+has no wheel or cameras, so those traces are disabled with the reason.
+
+**Tests:**
+- On a hand-built session (2 units, 2 trials): exactly the spikes inside the
+  padded trial window, relative to the chosen zero.
+- Row order: probe, then depth.
+- A missing event is listed as not recorded and not drawn.
+- Single-trial wheel speed equals that trial's row in the wheel-speed PSTH
+  computation on the same bins.
+- "Next" skips trials failing the trial filter; the toggle includes them.
+- A project round trip keeps the trial view state.
 
 ## 7. Unit quality panel
 

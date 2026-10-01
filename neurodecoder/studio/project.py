@@ -4,7 +4,8 @@ A project holds no results. It records:
 - the data source: an IBL session, or a Phy folder plus events CSV;
 - a sha256 of each source file (Phy) and a fingerprint of the loaded Session;
 - the QC and analysis configs, by hash and content;
-- the view: event, window, bin, baseline, region level and node, filters, unit.
+- the view: event, window, bin, baseline, region level and node, filters, unit,
+  and the single-trial view's trial, alignment, pads and number of trials.
 
 Opening a project reloads the data and recomputes everything, so it can never show
 numbers that disagree with the data. Anything that changed since it was saved is
@@ -23,6 +24,8 @@ import pandas as pd
 
 from neurodecoder.analysis.movement import DEFAULT_CONFIG as MOVEMENT_CONFIG
 from neurodecoder.analysis.responsiveness import DEFAULT_CONFIG as ANALYSIS_CONFIG
+from neurodecoder.analysis.trial_view import DEFAULT_CONFIG as TRIAL_VIEW_CONFIG
+from neurodecoder.analysis.trial_view import load_trial_view_config
 from neurodecoder.analysis.tuning import DEFAULT_CONFIG as SELECTIVITY_CONFIG
 from neurodecoder.data.backends.phy import load_session_phy
 from neurodecoder.data.load import key_parts, load_session
@@ -46,6 +49,7 @@ PHY_FILES = (
     "spike_templates.npy",
     "channel_positions.npy",
 )
+_TRIAL_CFG = load_trial_view_config()
 DEFAULT_VIEW = {
     "event": "stim_on",
     "t0": -0.5,
@@ -66,6 +70,14 @@ DEFAULT_VIEW = {
     "trials": {},
     # Responsiveness on movement-free trials only (analysis.movement); added later.
     "movement_free": False,
+    # The single-trial view (analysis.trial_view); added later. trial None: none chosen.
+    "trial": None,
+    "trial_align": "trial_start",
+    "trial_pre_s": _TRIAL_CFG.pre_pad_s,
+    "trial_post_s": _TRIAL_CFG.post_pad_s,
+    "trial_n": 1,
+    "trial_all": False,  # step through every trial, not only those passing the filters
+    "trial_traces": [],  # optional behaviour traces (analysis.trial_view.TRACES)
 }
 
 
@@ -133,6 +145,7 @@ def _configs(qc) -> dict:
             ("analysis", Path(ANALYSIS_CONFIG)),
             ("selectivity", Path(SELECTIVITY_CONFIG)),
             ("movement", Path(MOVEMENT_CONFIG)),
+            ("trial_view", Path(TRIAL_VIEW_CONFIG)),
         )
     }
 
@@ -206,12 +219,21 @@ def open_project(path: str | os.PathLike):
 
 
 def view_to_query(view: dict) -> dict[str, str]:
-    """A view as the server's query strings: booleans "1"/"0", and no key for None."""
+    """A view as the server's query strings: booleans "1"/"0", lists comma-joined, the
+    trial filters as JSON under "tf" (as the page sends them), and no key for None."""
     unknown = sorted(set(view) - set(DEFAULT_VIEW))
     if unknown:
         raise ValueError(f"unknown view settings {unknown}")
     query = {}
     for key, value in {**DEFAULT_VIEW, **view}.items():
-        if value is not None:
-            query[key] = ("1" if value else "0") if isinstance(value, bool) else str(value)
+        if value is None:
+            continue
+        if key == "trials":
+            query["tf"] = json.dumps(value)
+        elif isinstance(value, bool):
+            query[key] = "1" if value else "0"
+        elif isinstance(value, list | tuple):
+            query[key] = ",".join(map(str, value))
+        else:
+            query[key] = str(value)
     return query

@@ -87,33 +87,53 @@ def movement_free(trials: pd.DataFrame, until_s: float) -> np.ndarray:
     return np.isfinite(rt) & (rt > until_s)
 
 
-def wheel_speed_psth(wheel: TimeSeries, events: np.ndarray, window, bin_width: float) -> PSTH:
-    """Mean ± SEM wheel speed (rad/s) per bin around each event, across trials.
-
-    Speed is |d position / dt| at each wheel sample; a bin's value is the mean of the
-    samples inside it. Events with no time are excluded and counted.
-    """
+def wheel_speed(wheel: TimeSeries) -> tuple[np.ndarray, np.ndarray]:
+    """(n_samples,) times and |d position / dt| (rad/s) at each wheel sample."""
     t = np.asarray(wheel.timestamps, np.float64)
     position = np.asarray(wheel.data, np.float64)
     assert position.ndim == 1 and t.shape == position.shape
-    speed = np.abs(np.gradient(position, t))
+    return t, np.abs(np.gradient(position, t))
+
+
+def binned_wheel_speed(
+    wheel: TimeSeries, events: np.ndarray, window, bin_width: float
+) -> np.ndarray:
+    """(n_events, n_bins) mean wheel speed (rad/s) of the samples in each bin around
+    each event; NaN for a bin with no samples. events: (n_events,), all finite.
+
+    The one speed computation: the wheel-speed PSTH and the single-trial view both
+    use it, so a trial's row here is what either of them plots.
+    """
+    t, speed = wheel_speed(wheel)
     events = np.asarray(events, np.float64)
-    valid = events[np.isfinite(events)]
-    if valid.size == 0:
-        raise ValueError("no trials with a time for this event")
-    edges = bin_edges(window, bin_width)
-    absolute = valid[:, None] + edges[None, :]  # (n_trials, n_bins + 1)
-    if absolute.min() < t[0] or absolute.max() > t[-1]:
-        raise ValueError("some event windows fall outside the wheel recording")
+    assert events.ndim == 1 and np.isfinite(events).all()
+    absolute = events[:, None] + bin_edges(window, bin_width)[None, :]  # (n_events, n_bins + 1)
     idx = np.searchsorted(t, absolute, side="left")
     csum = np.concatenate([[0.0], np.cumsum(speed)])
     sums = np.diff(csum[idx], axis=1)
     counts = np.diff(idx, axis=1)
-    per_trial = np.divide(sums, counts, out=np.full(sums.shape, np.nan), where=counts > 0)
+    return np.divide(sums, counts, out=np.full(sums.shape, np.nan), where=counts > 0)
+
+
+def wheel_speed_psth(wheel: TimeSeries, events: np.ndarray, window, bin_width: float) -> PSTH:
+    """Mean ± SEM wheel speed (rad/s) per bin around each event, across trials.
+
+    Speed is |d position / dt| at each wheel sample; a bin's value is the mean of the
+    samples inside it (binned_wheel_speed). Events with no time are excluded and counted.
+    """
+    events = np.asarray(events, np.float64)
+    valid = events[np.isfinite(events)]
+    if valid.size == 0:
+        raise ValueError("no trials with a time for this event")
+    t = np.asarray(wheel.timestamps, np.float64)
+    if valid.min() + window[0] < t[0] or valid.max() + window[1] > t[-1]:
+        raise ValueError("some event windows fall outside the wheel recording")
+    per_trial = binned_wheel_speed(wheel, valid, window, bin_width)  # (n_trials, n_bins)
     n = per_trial.shape[0]
     sem = (
         per_trial.std(axis=0, ddof=1) / np.sqrt(n) if n > 1 else np.full(per_trial.shape[1], np.nan)
     )
+    edges = bin_edges(window, bin_width)
     centers = (edges[:-1] + edges[1:]) / 2
     return PSTH(centers, per_trial.mean(axis=0), sem, n, int(events.size - valid.size))
 

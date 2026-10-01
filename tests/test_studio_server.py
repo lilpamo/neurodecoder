@@ -289,3 +289,59 @@ def test_movement_controls_on_real_data(tmp_path):
     assert {"wheel.svg", "wheel.json", "movement_locking.csv", "responsiveness.csv"} <= names
     assert json.loads((out / "wheel.json").read_text())["unit"] == "rad/s"
     assert pd.read_csv(out / "responsiveness.csv")["n_trials"].iloc[0] == 87
+
+
+def test_the_trial_view_on_a_phy_folder(tmp_path):
+    studio = _studio(tmp_path)  # 2 trials; events: intervals and stimOn only; no wheel
+    q = {**PLOT, "trial": "0", "unit": "imec0_3"}
+    d = studio.trial_json(q)
+    assert d["header"]["trial"] == 0 and d["header"]["passes_filter"] is True
+    assert d["not_recorded"] == [] and "goCue_times" in d["absent_events"]
+    assert d["wheel_missing"] == "Phy import reads spikes and events only"
+    assert (d["place"], d["n"], d["previous"], d["next"]) == (1, 2, None, 1)
+    png, headers = studio.trial_png(q)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert sorted(headers["X-Rows"].split(",")) == ["imec0_11", "imec0_3", "imec0_7", "imec0_9"]
+    caption = unquote(headers["X-Caption"])
+    assert caption.startswith("Single trial, descriptive (no test) · trial 0 (0-based) · 4 units")
+    with pytest.raises(ValueError, match="whole numbers"):
+        studio.trial_json({**q, "trial": "null"})
+    with pytest.raises(ValueError, match="no trial 5: this session has trials 0 to 1"):
+        studio.trial_json({**q, "trial": "5"})
+    # The unit raster says which trial each of its rows is, for opening it here.
+    _, headers = studio.unit_png({**PLOT, "unit": "imec0_3"})
+    assert headers["X-Trials"] == "0,1" and len(headers["X-Box"].split(",")) == 4
+
+
+def test_the_trial_view_on_real_data(tmp_path):
+    import json
+
+    from neurodecoder.data.load import load_data_config, load_session
+    from neurodecoder.qc.units import load_qc_config
+    from neurodecoder.studio.export import export_view
+    from neurodecoder.studio.project import DEFAULT_VIEW, Source
+
+    eid = "d23a44ef-1402-4ed7-97f5-47e9a7a504d9"
+    try:
+        session = load_session(eid, "bwm")
+    except (OSError, ValueError) as e:
+        pytest.skip(f"d23a44ef not available: {e}")
+    source = Source(kind="ibl", eid=eid, backend="bwm")
+    studio = Studio(session, load_qc_config(), load_data_config().data_root / "atlas", source)
+    tf = json.dumps({"bwm_include": True})
+    q = {**PLOT, "all": "0", "tf": tf, "trial": "0", "unit": "probe00_3"}
+    d = studio.trial_json(q)
+    assert d["header"]["bwm_include"] is True and d["next"] == 2  # trial 1 fails bwm_include
+    assert studio.trial_json({**q, "trial_all": "1"})["next"] == 1
+    one = studio.trial_json({**q, "trial": "1"})
+    assert one["header"]["passes_filter"] is False and one["place"] is None
+    _, headers = studio.trial_png({**q, "trial_align": "stimOn_times", "trial_n": "3"})
+    assert len(headers["X-Rows"].split(",")) == 390
+    _, headers = studio.unit_png({**q, "t0": "-0.5", "t1": "1.0", "bin": "0.02"})
+    assert len(headers["X-Trials"].split(",")) == 290 and "1" not in headers["X-Trials"].split(",")
+    view = {**DEFAULT_VIEW, "unit": "probe00_3", "trials": {"bwm_include": True}, "trial": 12}
+    out = export_view(studio, view, tmp_path / "runs")
+    sidecar = json.loads((out / "trial.json").read_text())
+    assert len(sidecar["rows"]) == 390 and sidecar["window"]["trial"] == 12
+    assert {e["label"] for e in sidecar["events"]} >= {"stimulus on", "feedback: reward"}
+    assert json.loads((out / "unit.json").read_text())["trials"]["n_kept"] == 290

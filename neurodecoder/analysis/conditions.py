@@ -35,7 +35,7 @@ CONDITIONS = {
     "block": ("Block", ("probabilityLeft",)),
     "reaction_time": ("Reaction time", ("stimOn_times", "firstMovement_times")),
 }
-_NAMES = {
+LEVEL_NAMES = {  # condition -> value -> name, shared with the single-trial header
     "side": {-1.0: "left", 1.0: "right"},
     "choice": {-1.0: "right (-1)", 1.0: "left (+1)"},
     "outcome": {-1.0: "error", 1.0: "reward"},
@@ -152,7 +152,7 @@ def condition(trials: pd.DataFrame, name: str) -> Condition:
         ms = f"{median * 1000:.0f} ms"
         names = tuple(f"early (< {ms})" if v == 0 else f"late (≥ {ms})" for v in levels)
     else:
-        names = tuple(_NAMES[name].get(v, f"{v:g}") for v in levels)
+        names = tuple(LEVEL_NAMES[name].get(v, f"{v:g}") for v in levels)
     n_excluded = int(np.isnan(values).sum())
     assert values.shape == (len(trials),)
     return Condition(name, values, levels, names, n_excluded, excluded if n_excluded else "")

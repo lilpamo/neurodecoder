@@ -15,11 +15,14 @@ from dataclasses import dataclass
 
 import numpy as np
 from matplotlib import rc_context
+from matplotlib.collections import LineCollection
 from matplotlib.colors import LinearSegmentedColormap, to_hex, to_rgb
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
 from neurodecoder.analysis.psth import PSTH
+from neurodecoder.analysis.trial_view import alignment_label
 
 # The reference palette's categorical slots, in its fixed, CVD-validated order.
 _CATEGORICAL_LIGHT = [
@@ -227,9 +230,19 @@ def build_unit_figure(
     return fig
 
 
-def unit_figure(groups: list[TraceGroup], window, baseline: bool, theme: str) -> bytes:
-    """build_unit_figure as a PNG for the page."""
-    return _png(build_unit_figure(groups, window, baseline, theme))
+def _box(ax) -> tuple[float, float, float, float]:
+    """An axes' (left, top, right, bottom) as fractions of the image, top-down."""
+    pos = ax.get_position()
+    return pos.x0, 1 - pos.y1, pos.x1, 1 - pos.y0
+
+
+def unit_figure(
+    groups: list[TraceGroup], window, baseline: bool, theme: str
+) -> tuple[bytes, tuple[float, float, float, float]]:
+    """build_unit_figure as a PNG for the page, with the raster's box: raster row i
+    (top-down, groups in order) spans top + (bottom - top) * [i, i + 1] / n_rows."""
+    fig = build_unit_figure(groups, window, baseline, theme)
+    return _png(fig), _box(fig.axes[0])
 
 
 def build_tuning_figure(
@@ -370,3 +383,220 @@ def build_population_figure(
     left, bottom, width, height = box
     bottom, height = bottom * squeeze, height * squeeze
     return fig, (left, 1 - bottom - height, left + width, 1 - bottom)
+
+
+# Event lines take the categorical slots in task order; feedback keeps one hue and
+# differs by style (reward solid, error dotted), so outcome is never colour alone.
+_EVENT_SLOTS = {
+    "stimOn_times": 0,
+    "goCue_times": 1,
+    "firstMovement_times": 2,
+    "response_times": 3,
+    "feedback_times": 4,
+    "stimOff_times": 5,
+}
+_EVENT_STYLE = {"error": (0, (1, 1.5))}
+# In IBL the go cue comes within ~1 ms of stimulus onset and feedback within ~1 ms of
+# the response, so those pairs overlap at any readable scale. The go cue and the
+# response are drawn wider underneath, as a halo, so both lines of a pair stay
+# visible at their true times.
+_EVENT_WIDTH = {"goCue_times": 3.2, "response_times": 3.2}
+_TRACE_LABELS = {
+    "motion_energy_left": "motion energy\n(left cam)",
+    "motion_energy_right": "motion energy\n(right cam)",
+    "motion_energy_body": "motion energy\n(body cam)",
+    "pupil_left": "pupil, raw\n(left cam)",
+    "pupil_right": "pupil, raw\n(right cam)",
+}
+
+
+def _runs(values: list) -> list[tuple[int, int, object]]:
+    """(start, stop, value) for each run of equal consecutive values."""
+    out, start = [], 0
+    for i in range(1, len(values) + 1):
+        if i == len(values) or values[i] != values[start]:
+            out.append((start, i, values[start]))
+            start = i
+    return out
+
+
+def build_trial_figure(
+    view,
+    row_regions: list[str | None],
+    region_colours: dict[str, str],
+    selected: str | None,
+    theme: str,
+    title=None,
+) -> tuple[Figure, tuple[float, float, float, float]]:
+    """Single-trial population raster (analysis.trial_view.TrialView), the task events as
+    lines with one legend, and behaviour on the same time axis below.
+
+    Rows run top to bottom in view.rows order, with probe separators and region colour
+    bands (row_regions, (n_rows,)) on the left. Returns the figure and the raster's box
+    (left, top, right, bottom) as fractions of the image, top-down, like the heatmap.
+    """
+    t = _theme(theme)
+    n = len(view.rows)
+    panels = []
+    if view.wheel is not None:
+        panels += [
+            ("wheel position\n(rad)", view.wheel["position_t_s"], view.wheel["position_rad"])
+        ]
+        panels += [("wheel speed\n(rad/s)", view.wheel["speed_t_s"], view.wheel["speed"])]
+    panels += [(_TRACE_LABELS[k], *v) for k, v in view.traces.items()]
+    notes = []
+    if view.not_recorded:
+        by_trial: dict[int, list[str]] = {}
+        for e in view.not_recorded:
+            by_trial.setdefault(e["trial"], []).append(e["label"])
+        notes += [f"not recorded on trial {k}: {', '.join(v)}" for k, v in by_trial.items()]
+    if view.absent_events:
+        notes.append(f"not in this session's trials table: {', '.join(view.absent_events)}")
+    if view.wheel_missing:
+        notes.append(f"no wheel: {view.wheel_missing}")
+    notes += [f"no {k.replace('_', ' ')}: {why}" for k, why in view.traces_missing.items()]
+
+    # Layout in inches, top to bottom, then converted to figure fractions.
+    width, left_in, right_in = 11.0, 1.25, 0.7
+    raster_h = float(np.clip(n * 0.012, 1.6, 4.5))
+    heights = {
+        "title": 0.3 if title else 0.08,
+        "legend": 0.32,
+        "notes": 0.2 * len(notes),
+        "strip": 0.22,
+        "raster": raster_h,
+        "panels": len(panels) * 0.72,
+        "bottom": 0.5,
+    }
+    height = sum(heights.values())
+    fig = Figure(figsize=(width, height))
+    if title:
+        fig.text(0.01, 1 - 0.08 / height, title, va="top", ha="left", size=8, color=t["ink2"])
+    x0, x1 = left_in / width, 1 - right_in / width
+
+    def box(top_in, h_in):
+        return (x0, 1 - (top_in + h_in) / height, x1 - x0, h_in / height)
+
+    top = heights["title"] + heights["legend"] + heights["notes"]
+    for i, note in enumerate(notes):
+        y = 1 - (heights["title"] + heights["legend"] + 0.16 + 0.2 * i) / height
+        fig.text(x0, y, note, size=7.5, color=t["ink2"], va="center")
+    ax_t = fig.add_axes(box(top, heights["strip"]))
+    ax_r = fig.add_axes(box(top + heights["strip"], raster_h), sharex=ax_t)
+    raster_box = box(top + heights["strip"], raster_h)
+    ax_b = fig.add_axes((x0 - 0.16 / width, raster_box[1], 0.1 / width, raster_box[3]), sharey=ax_r)
+    axes_p = []
+    y = top + heights["strip"] + raster_h + 0.12
+    for _ in panels:
+        axes_p.append(fig.add_axes(box(y, 0.6), sharex=ax_r))
+        y += 0.72
+    lo, hi = view.window.start_rel_s, view.window.stop_rel_s
+
+    # Trial strip: each shown trial as a bar with its number; the current one in ink.
+    for b in view.boundaries:
+        current = b["trial"] == view.window.trial
+        ax_t.axvspan(b["start_rel_s"], b["stop_rel_s"], color=t["grid"], lw=0)
+        label = f"trial {b['trial']}" + ("" if b["passes_filter"] else " · fails trial filters")
+        ax_t.text(
+            max(b["start_rel_s"], lo) + 0.01 * (hi - lo),
+            0.5,
+            label,
+            va="center",
+            size=7.5,
+            color=t["ink"] if current else t["ink2"],
+            weight="bold" if current else "normal",
+        )
+    ax_t.set_ylim(0, 1)
+    ax_t.axis("off")
+
+    # Raster: one row per unit, row 0 on top.
+    segments = [
+        ((s, i + 0.12), (s, i + 0.88)) for i, spikes in enumerate(view.spikes) for s in spikes
+    ]
+    ax_r.add_collection(LineCollection(segments, colors=t["ink"], linewidths=0.6))
+    ax_r.set_ylim(n, 0)
+    ax_r.set_xlim(lo, hi)
+    if selected in view.rows:
+        i = view.rows.index(selected)
+        ax_r.axhspan(i, i + 1, color=t["muted"], alpha=0.3, lw=0)
+        ax_r.plot([hi], [i + 0.5], marker="<", color=t["ink"], ms=6, clip_on=False, zorder=5)
+    for start, stop, probe in _runs(view.probes):
+        if start:
+            ax_r.axhline(start, color=t["axis"], lw=1.2)
+        ax_r.text(
+            1.02,
+            1 - (start + stop) / 2 / n,
+            probe,
+            transform=ax_r.transAxes,
+            size=7.5,
+            color=t["ink2"],
+            va="center",
+            ha="left",
+        )
+    ax_r.tick_params(labelbottom=not panels, left=False, labelleft=False)
+    _style(ax_r, t)
+    ax_r.spines["left"].set_visible(False)
+
+    # Region bands, labelled where a run is tall enough to read.
+    none = (0.0, 0.0, 0.0, 0.0)
+    rgba = np.array([to_rgb(region_colours[r]) + (1.0,) if r else none for r in row_regions])
+    ax_b.imshow(rgba[:, None, :], aspect="auto", interpolation="nearest", extent=(0, 1, n, 0))
+    ticks = [(a + b) / 2 for a, b, r in _runs(row_regions) if r and (b - a) >= max(1, 0.025 * n)]
+    names = [r for a, b, r in _runs(row_regions) if r and (b - a) >= max(1, 0.025 * n)]
+    ax_b.set_yticks(ticks, names)
+    ax_b.set_xticks([])
+    ax_b.tick_params(axis="y", colors=t["ink2"], labelsize=7, length=0)
+    for side in ax_b.spines.values():
+        side.set_visible(False)
+    ax_b.set_facecolor("none")
+
+    # Behaviour panels.
+    for ax, (label, x, yv) in zip(axes_p, panels):
+        ax.plot(x, yv, color=t["ink2"], lw=1.1)
+        ax.set_ylabel(label, rotation=0, ha="right", va="center", size=7.5)
+        ax.grid(axis="y", color=t["grid"], lw=0.6)
+        ax.set_axisbelow(True)
+        _style(ax, t)
+        ax.tick_params(labelbottom=ax is axes_p[-1], labelsize=7)
+    last = axes_p[-1] if axes_p else ax_r
+    last.set_xlabel(f"time from {alignment_label(view.window.align)} (s)")
+
+    # Trial boundaries and events on every axis that shares the time axis.
+    def style(e):
+        return {
+            "color": t["categorical"][_EVENT_SLOTS[e["event"]]],
+            "lw": _EVENT_WIDTH.get(e["event"], 1.3),
+            "ls": _EVENT_STYLE.get(e["kind"], "-"),
+        }
+
+    for ax in [ax_r, *axes_p]:
+        for b in view.boundaries:
+            for x in (b["start_rel_s"], b["stop_rel_s"]):
+                ax.axvline(x, color=t["muted"], lw=0.8)
+        for e in view.events:
+            ax.axvline(e["time_s"], zorder=3 if e["event"] in _EVENT_WIDTH else 4, **style(e))
+    # One legend entry per event label drawn, in task order (reward before error).
+    legend = {}
+    for e in sorted(view.events, key=lambda e: (_EVENT_SLOTS[e["event"]], e["kind"] or "")):
+        legend.setdefault(e["label"], Line2D([], [], **style(e)))
+    if legend:
+        fig.legend(
+            list(legend.values()),
+            list(legend),
+            loc="center left",
+            bbox_to_anchor=(x0 - 0.01, 1 - (heights["title"] + 0.16) / height),
+            ncol=len(legend),
+            frameon=False,
+            fontsize=7.5,
+            labelcolor=t["ink2"],
+            handlelength=1.8,
+            columnspacing=1.4,
+        )
+    left, bottom, w, h = raster_box
+    return fig, (left, 1 - bottom - h, left + w, 1 - bottom)
+
+
+def trial_figure(view, row_regions, region_colours, selected, theme) -> tuple[bytes, tuple]:
+    """build_trial_figure as a PNG for the page, with the raster's box."""
+    fig, raster_box = build_trial_figure(view, row_regions, region_colours, selected, theme)
+    return _png(fig), raster_box

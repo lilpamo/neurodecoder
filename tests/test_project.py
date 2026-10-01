@@ -14,6 +14,7 @@ from neurodecoder.studio.project import (
     make_project,
     open_project,
     save_project,
+    view_to_query,
 )
 
 SAMPLES = [30, 60, 90, 150, 30000, 45000, 60000, 90000]
@@ -130,10 +131,45 @@ def test_trial_filters_round_trip_through_a_project(tmp_path):
 def test_every_config_behind_a_labelled_result_is_hashed(tmp_path):
     _, _, path = _saved(tmp_path)
     saved = json.loads(path.read_text())
-    assert set(saved["configs"]) == {"qc", "analysis", "selectivity", "movement"}
+    assert set(saved["configs"]) == {"qc", "analysis", "selectivity", "movement", "trial_view"}
     assert saved["configs"]["movement"]["path"] == "configs/movement.yaml"
     # Files saved before a config was recorded say so, rather than failing to open.
     del saved["configs"]["movement"]
     path.write_text(json.dumps(saved))
     _, _, _, warnings = open_project(path)
     assert warnings == ["configs/movement.yaml was not recorded when the project was saved"]
+
+
+def test_the_trial_view_state_round_trips_through_a_project(tmp_path):
+    source = _source(tmp_path)
+    session, qc = load_source(source)
+    state = {
+        "trial": 1,
+        "trial_align": "stimOn_times",
+        "trial_pre_s": 0.25,
+        "trial_post_s": 1.0,
+        "trial_n": 3,
+        "trial_all": True,
+        "trial_traces": ["pupil_left"],
+    }
+    path = tmp_path / "trial.ndstudio.json"
+    save_project(make_project(source, session, qc, {**VIEW, **state}), path)
+    project, _, _, warnings = open_project(path)
+    assert warnings == []
+    assert {k: project["view"][k] for k in state} == state
+    q = view_to_query(project["view"])
+    assert (q["trial"], q["trial_align"], q["trial_n"], q["trial_all"]) == (
+        "1",
+        "stimOn_times",
+        "3",
+        "1",
+    )
+    assert q["trial_traces"] == "pupil_left"
+
+
+def test_exports_send_the_views_trial_filters_as_the_page_does():
+    # Before this, the view's trial filters reached the server under the wrong key, so
+    # exports were computed on every trial.
+    trials = {"bwm_include": True, "exclude_nogo": True}
+    q = view_to_query({**VIEW, "trials": trials})
+    assert json.loads(q["tf"]) == trials and "trials" not in q
