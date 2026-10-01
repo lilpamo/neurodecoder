@@ -143,3 +143,5 @@ td.resp { text-align: center; }
 .qualityfacts ul { margin: 0; padding-left: 18px; }
 .qualityfacts table { width: auto; font-size: 12px; }
 .qualityfacts td, .qualityfacts th { padding: 2px 8px 2px 0; border: 0; position: static; background: none; }
+.partner { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--ink2); margin-bottom: 6px; }
+.qualityfacts .flag { color: var(--fail); }

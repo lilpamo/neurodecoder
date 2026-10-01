@@ -736,3 +736,40 @@ def build_quality_figure(q, theme: str, title=None) -> Figure:
 def quality_figure(q, theme: str) -> bytes:
     """build_quality_figure as a PNG for the page."""
     return _png(build_quality_figure(q, theme))
+
+
+def build_ccg_figure(lags, observed, expected, synaptic_window, theme: str, title=None) -> Figure:
+    """Cross-correlogram (counts by lag, bars) with its expectation under interval
+    jitter (line) and the synaptic window shaded; below, the jitter-corrected
+    correlogram (observed - expected). Lags in seconds, drawn in ms."""
+    t = _theme(theme)
+    fig = Figure(figsize=(5.6, 4.2))
+    add, _ = _frame(fig, title, t["ink2"])
+    ax_raw = add((0.13, 0.47, 0.84, 0.45))
+    ax_cor = add((0.13, 0.11, 0.84, 0.26), sharex=ax_raw)
+    ms = np.asarray(lags) * 1000
+    width = (ms[1] - ms[0]) if ms.size > 1 else 1.0
+    for ax in (ax_raw, ax_cor):
+        ax.axvspan(synaptic_window[0] * 1000, synaptic_window[1] * 1000, color=t["grid"], lw=0)
+    ax_raw.bar(ms, observed, width=width, color=t["series"], lw=0, label="observed")
+    ax_raw.plot(ms, expected, color=t["ink"], lw=1.4, label="expected under jitter")
+    ax_raw.set_ylabel("spike pairs")
+    ax_raw.tick_params(labelbottom=False)
+    ax_raw.legend(fontsize=7, frameon=False, labelcolor=t["ink2"], loc="upper left")
+    corrected = np.asarray(observed, float) - np.asarray(expected, float)
+    ax_cor.bar(ms, corrected, width=width, color=t["series"], lw=0)
+    ax_cor.axhline(0, color=t["axis"], lw=1)
+    ax_cor.set_ylabel("observed −\nexpected")
+    ax_cor.set_xlabel("lag (ms): partner's spike − selected unit's spike")
+    ax_cor.set_xlim(ms[0] - width / 2, ms[-1] + width / 2)
+    for ax in (ax_raw, ax_cor):
+        _style(ax, t)
+        ax.grid(axis="y", color=t["grid"], lw=0.6)
+        ax.set_axisbelow(True)
+        ax.axvline(0, color=t["muted"], lw=1, ls=(0, (3, 3)))
+    return fig
+
+
+def ccg_figure(lags, observed, expected, synaptic_window, theme: str) -> bytes:
+    """build_ccg_figure as a PNG for the page."""
+    return _png(build_ccg_figure(lags, observed, expected, synaptic_window, theme))

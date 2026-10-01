@@ -46,12 +46,11 @@ def test_autocorrelogram_by_hand():
     # never paired with itself.
     _, same = autocorrelogram(np.array([1.0, 1.0]), 0.005, 0.001)
     assert same[5] == 2 and same.sum() == 2
-    # The outer bins are [4.5, 5.5) ms. A lag within rounding of 5.5 ms counts as on the
-    # edge, so outside, rather than overflowing past the last bin.
+    # The outer bins are [-5.5, -4.5) and [4.5, 5.5) ms; nothing overflows past them.
     _, inside = autocorrelogram(np.array([0.0, 0.0054]), 0.005, 0.001)
     assert inside[[0, -1]].tolist() == [1, 1] and inside.sum() == 2
-    _, edge = autocorrelogram(np.array([0.0, 0.0055 - 1e-13]), 0.005, 0.001)
-    assert edge.sum() == 0
+    _, outside = autocorrelogram(np.array([0.0, 0.0056]), 0.005, 0.001)
+    assert outside.sum() == 0
 
 
 def test_presence_ratio_by_hand_with_ibls_bins():

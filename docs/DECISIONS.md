@@ -6,6 +6,81 @@ first.
 
 ---
 
+### 2026-10-01 — Cross-correlograms and putative connections (`analysis/correlograms.py`, `configs/correlograms.yaml`)
+
+**What (the user's step 8):**
+- **A Pairs tab** in the Selected unit card: the cross-correlogram with a chosen
+  partner, its expectation under interval jitter, the jitter-corrected correlogram
+  (observed − expected) and the pair's test results.
+- **A Connections section:** tests every pair among the shown units, both
+  directions, with BH across all of them. It refuses more than `max_units` (30)
+  units.
+- **A "Conn." column** shows each unit's outgoing and incoming putative
+  connections.
+- **Saved and exported:** the partner is saved in the project. Export adds
+  `ccg.svg/.pdf/.json` and `connections.csv`.
+
+**The null, exact rather than sampled:** interval jitter (Amarasingham et al. 2012).
+- **What is jittered:** the second unit's spikes, each uniformly within its fixed
+  5 ms window. That keeps everything slower than 5 ms and breaks millisecond timing.
+- **The statistic:** the count of pairs at lags 1–4 ms.
+- **Why it can be exact:** under jitter the count is a sum of independent
+  per-window counts. Their exact distribution comes from convolution, and the
+  expected correlogram has a closed form.
+- **So there is no seed:** the plan asked for an explicit seed, but nothing is
+  random, as in step 3's all-shifts null.
+- **Checked against Monte Carlo:** 4,000 jitters match the exact mean and tail
+  probability.
+
+**Choices, flagged for review:**
+1. **Excitatory only (one-sided).** The jitter expectation is the true correlogram
+   smoothed over 5 ms windows. A real A → B peak at +2 ms raises the expectation
+   at B → A's lags too, so B → A shows a significant "trough": p ≈ 3e-14 two-sided,
+   on an injected A → B coupling with no B → A coupling. Labelling inhibition
+   would call that every time, so troughs are shown, not labelled.
+2. **Close pairs are labelled but flagged:** units within 50 µm on one probe. Sorting
+   deletes their near-simultaneous spikes, and smoothing that zero-lag dip lowers
+   the expectation at 1–4 ms, which can make an excess.
+   - **On d23a44ef:** in LP all 6 labelled pairs are close; in CA1, 3 of 9.
+   - **The alternative is your call:** exclude close pairs from the test
+     altogether.
+3. **The test set is exactly the shown units,** and a result belongs to that set.
+   Changing the filters means a new test.
+4. **One correlogram implementation:** the quality panel's autocorrelogram now
+   uses `cross_correlogram` (half-open bins), minus each spike's pair with itself.
+
+**A bug found and fixed:** jitter windows assigned by `floor(t / D)` misplace
+boundaries late in a session (`129.04 / 0.005` < 25808). Window probabilities
+stopped summing to 1, and p-values went negative. It now uses exact comparisons
+with the window boundaries, and a test checks that shifting both trains by 3000 s
+changes nothing.
+
+**Checks (test-only spike trains, never shown as data):**
+- **By hand:** correlogram counts, and the jitter expectation.
+- **Calibration:** on pairs sharing a slow 1 Hz rate modulation but no fine
+  coupling, the one-sided p is uniform (KS p > 0.01; 0.94 when measured), with
+  4.3% below 0.05.
+- **Injected coupling:** a 2 ms coupling is found (p < 1e-6) in its direction only.
+
+**Real data (d23a44ef, QC-passing units):**
+
+| Region | Units | Tests | Labelled | Close-flagged among them | Time |
+|---|---|---|---|---|---|
+| CA1 | 13 | 156 | 9 | 3 | 16 s |
+| PO | 30 | 870 | 0 | 0 | 33 s |
+| LP | 28 | 756 | 6 | 6 | 34 s |
+
+- probe00_446 → probe00_468 (CA1, not close): a sharp peak at +1 to +1.5 ms,
+  4,113 pairs per 0.5 ms bin against about 1,450 nearby, q = 2e-244.
+- probe00_468 (82 Hz) receives 6 of CA1's 9.
+
+**Limitations:**
+- Common input at millisecond timescales looks the same as a connection, hence
+  "putative".
+- An effect spread over more than 5 ms is part of the null.
+
+**No new dependency.**
+
 ### 2026-10-01 — Unit quality panel (`analysis/unit_quality.py`, `data/cluster_files.py`, `configs/unit_quality.yaml`)
 
 **What (the user's step 7):** a Quality tab beside Activity in the Selected unit

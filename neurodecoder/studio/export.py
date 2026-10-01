@@ -9,6 +9,8 @@ Each export is a new `runs/<run_id>/` folder (run_id = UTC time + "_studio"):
   chosen, with every spike time and event time it plots;
 - `quality.svg`, `quality.pdf`, `quality.json`: the selected unit's quality panel,
   with every count, test row and waveform sample it plots;
+- `ccg.svg`, `ccg.pdf`, `ccg.json`: the cross-correlogram with the chosen partner;
+  `connections.csv` when the connection test was run on the shown units;
 - `responsiveness.csv`, when the test was run for this event (on all trials or on
   movement-free trials only, as the view says);
 - `selectivity.csv` and `movement_locking.csv`, when those tests were run;
@@ -35,6 +37,7 @@ import numpy as np
 
 from neurodecoder.studio.project import REPO, make_project, view_to_query
 from neurodecoder.viz.studio_plots import (
+    build_ccg_figure,
     build_population_figure,
     build_quality_figure,
     build_trial_figure,
@@ -219,6 +222,36 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
         )
         files += ["quality.svg", "quality.pdf", "quality.json"]
 
+    if view.get("unit") and view.get("partner"):
+        d = studio.pair_data(q)
+        fig = build_ccg_figure(
+            d["lags"],
+            d["observed"],
+            d["expected"],
+            studio.ccg_cfg.synaptic_window_s,
+            THEME,
+            d["caption"],
+        )
+        for suffix in ("svg", "pdf"):
+            save_vector(fig, out / f"ccg.{suffix}")
+        _write_json(
+            out / "ccg.json",
+            {
+                **{k: d[k] for k in ("caption", "close", "close_why", "tests")},
+                "unit": view["unit"],
+                "partner": view["partner"],
+                "lags_s": d["lags"],
+                "observed": d["observed"],
+                "expected_under_jitter": d["expected"],
+                "config": asdict(studio.ccg_cfg),
+            },
+        )
+        files += ["ccg.svg", "ccg.pdf", "ccg.json"]
+    pairs = studio._connections.get(studio._pairs_key(q))
+    if pairs is not None:
+        pairs.to_csv(out / "connections.csv", index=False)
+        files.append("connections.csv")
+
     if view.get("trial") is not None:
         t = studio.trial_data(q)
         v = t["view"]
@@ -282,6 +315,9 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
         "responsiveness": None if tested is None else asdict(studio.response_cfg),
         "selectivity": None if chosen is None else asdict(studio.selectivity_cfg),
         "movement": None if locking is None else asdict(studio.movement_cfg),
+        "correlograms": (
+            None if pairs is None and not view.get("partner") else asdict(studio.ccg_cfg)
+        ),
         "files": files,
         "versions": {
             "python": platform.python_version(),

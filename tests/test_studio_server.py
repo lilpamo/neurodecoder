@@ -396,3 +396,38 @@ def test_the_quality_panel_on_real_data():
     # The cache has probe01's metrics but not its waveforms: the panel names the file.
     assert other["waveform"] is None and "clusters.waveforms.npy" in other["waveform_missing"]
     assert other["ibl_criteria"] is not None
+
+
+def test_pairs_and_connections_on_a_phy_folder(tmp_path):
+    studio = _studio(tmp_path)  # 4 units; no templates, so no site positions
+    q = {**PLOT, "unit": "imec0_3", "partner": "imec0_7"}
+    d = studio.pair_json(q)
+    assert d["close"] is None and d["close_why"].startswith("no site position")
+    assert d["tests"] == []  # not run yet
+    assert unquote(studio.pair_png(q)[1]["X-Caption"]).startswith("imec0_3 → imec0_7")
+    with pytest.raises(ValueError, match="other than the selected unit"):
+        studio.pair_json({**q, "partner": "imec0_3"})
+    summary = studio.connections_json(q)
+    assert summary["n_units"] == 4 and summary["n_pairs"] == 6 and summary["n_tests"] == 12
+    assert summary["null"] == "interval jitter, 5 ms windows, exact"
+    assert len(studio.pair_json(q)["tests"]) == 2  # both directions, from the cached run
+    rows = studio.units_json(q)["units"]
+    assert all(r["conn_out"] == 0 and r["conn_in"] == 0 and r["conn_to"] == [] for r in rows)
+    # Another unit set is another test: its pairs were not corrected together.
+    assert studio.units_json({**q, "all": "0"})["connections"] is None
+
+
+def test_a_real_monosynaptic_peak_shows_in_the_corrected_correlogram():
+    from neurodecoder.data.load import load_data_config, load_session
+    from neurodecoder.qc.units import load_qc_config
+
+    try:
+        session = load_session("d23a44ef-1402-4ed7-97f5-47e9a7a504d9", "bwm")
+    except (OSError, ValueError) as e:
+        pytest.skip(f"d23a44ef not available: {e}")
+    studio = Studio(session, load_qc_config(), load_data_config().data_root / "atlas")
+    d = studio.pair_data({"unit": "probe00_446", "partner": "probe00_468"})
+    excess = d["observed"] - d["expected"]
+    peak = d["lags"][excess.argmax()]
+    assert 0.0005 <= peak <= 0.002  # CA1 probe00_446 -> probe00_468, about +1 ms
+    assert d["close"] is False

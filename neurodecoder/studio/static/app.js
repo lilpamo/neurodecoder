@@ -6,7 +6,7 @@ import { OBJLoader } from '/static/vendor/three/OBJLoader.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { session: null, level: null, node: '', all: false, responsive: false, movementFree: false, probe: '', split: '', trials: {}, unit: null, rows: [], tree: [], popRows: null, box: null,
-  trial: null, trialNav: null, trialRows: null, trialBox: null, unitTrials: null, unitBox: null, unitTab: 'activity' };
+  trial: null, trialNav: null, trialRows: null, trialBox: null, unitTrials: null, unitBox: null, unitTab: 'activity', partner: null, connections: null };
 
 // ---------- helpers ----------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -79,6 +79,11 @@ async function init() {
   $('movementFree').checked = state.movementFree;
   renderTrialFilters();
   renderTrialControls(v);
+  state.partner = v.partner || null;
+  const c = s.correlograms;
+  $('connWhat').textContent = `Spikes of each unit ${c.synaptic_window_s[0] * 1000}–${c.synaptic_window_s[1] * 1000} ms after the other's, ` +
+    `against ${c.null} (an excess only: putative excitatory). Every pair of shown units, both directions, ` +
+    `Benjamini–Hochberg across them, α = ${s.response.alpha}. At most ${c.max_units} units at once.`;
   $('split').value = state.split;
   renderProbes();
   state.level = noRegion ? null : (s.levels.includes(v.level) ? v.level : s.default_level);
@@ -121,7 +126,7 @@ function currentView() {
     trials: state.trials, movement_free: state.movementFree,
     trial: state.trial, trial_align: $('trialAlign').value, trial_pre_s: +$('trialPre').value,
     trial_post_s: +$('trialPost').value, trial_n: trialCount(), trial_all: $('trialAll').checked,
-    trial_traces: trialTraces(),
+    trial_traces: trialTraces(), partner: state.partner,
   };
 }
 async function post(url, body) {
@@ -144,6 +149,7 @@ async function loadUnits() {
   renderTest(d.test);
   renderSelectivity(d.selectivity);
   renderLocking(d.locking);
+  renderConnections(d.connections);
   renderTrialCounts(d.trials);
   if (!state.rows.some((u) => u.id === state.unit)) state.unit = state.rows.length ? state.rows[0].id : null;
   renderTree();
@@ -341,7 +347,9 @@ function renderTable() {
         `<td class="${u.qc_passed ? '' : 'fail'}" title="${esc(u.qc_reason)}">${u.qc_passed ? 'pass' : 'fail'}</td>` +
         `<td class="resp" title="${respTitle(u)}">${{ up: '↑', down: '↓', no: '·' }[u.resp] || fmt(null)}</td>` +
         `<td class="num" title="${selTitle(u)}">${u.sel_auroc == null ? fmt(null) : u.sel_auroc.toFixed(2) + (u.sel ? '*' : '')}</td>` +
-        `<td class="resp" title="${lockTitle(u)}">${u.locked == null ? fmt(null) : u.locked ? (u.lock_hz > 0 ? '↑' : '↓') : '·'}</td></tr>`;
+        `<td class="resp" title="${lockTitle(u)}">${u.locked == null ? fmt(null) : u.locked ? (u.lock_hz > 0 ? '↑' : '↓') : '·'}</td>` +
+        `<td class="resp" title="${u.conn_out == null ? 'Not tested' : `${u.conn_out} outgoing, ${u.conn_in} incoming putative excitatory connections`}">` +
+        `${u.conn_out == null ? fmt(null) : (u.conn_out || u.conn_in ? `→${u.conn_out} ←${u.conn_in}` : '·')}</td></tr>`;
     })
     .join('');
 }
@@ -370,7 +378,7 @@ function selectUnit(id, { scroll = true } = {}) {
 }
 
 // ---------- plots (PNGs from viz/) ----------
-const latest = { unit: 0, pop: 0, tuning: 0, wheel: 0, trial: 0, quality: 0, qualityFacts: 0 };
+const latest = { unit: 0, pop: 0, tuning: 0, wheel: 0, trial: 0, quality: 0, qualityFacts: 0, pair: 0, pairFacts: 0 };
 async function fetchPlot(kind, url, img, caption, err) {
   const seq = ++latest[kind];
   const r = await fetch(url);
@@ -388,6 +396,7 @@ async function fetchPlot(kind, url, img, caption, err) {
 }
 async function plotUnit() {
   if (state.unitTab === 'quality') { plotQuality(); return; }
+  if (state.unitTab === 'pairs') { plotPair(); return; }
   plotWheel();
   plotTuning();
   if (!state.unit) return;
@@ -477,9 +486,74 @@ async function plotQuality() {
   }
   fetchPlot('quality', '/api/quality.png?' + q, $('qualityImg'), $('qualityCaption'), $('qualityErr'));
 }
+// ---------- pairs and connections ----------
+function renderConnections(t) {
+  state.connections = t;
+  const max = state.session.correlograms.max_units, n = state.rows.length;
+  $('runConn').disabled = n < 2 || n > max;
+  if (t) {
+    const on = t.probes.length === 1 ? `probe ${t.probes[0]}` : `probes ${t.probes.join(', ')}`;
+    $('connSummary').textContent = `${t.n_connected} putative excitatory connections among ${t.n_units} units on ${on} ` +
+      `(${t.n_pairs} pairs, ${t.n_tests} tests)` +
+      (t.n_connected ? ` · ${t.n_connected_close} of them between close units: a sorting artefact can make that` : '');
+  } else {
+    $('connSummary').textContent = n > max ? `${n} units shown: narrow to at most ${max} by probe or region to test.`
+      : n < 2 ? 'Needs at least 2 units.' : 'Not run for these units.';
+  }
+}
+async function runConnections() {
+  const button = $('runConn');
+  button.disabled = true;
+  $('connSummary').textContent = `Testing ${state.rows.length * (state.rows.length - 1)} directed pairs… up to a minute.`;
+  try {
+    await getJSON('/api/connections?' + params({ responsive: state.responsive ? 1 : 0 }));
+    await loadUnits();
+  } catch (e) {
+    $('connSummary').textContent = e.message;
+    button.disabled = false;
+  }
+}
+function renderPartners() {
+  const others = state.rows.filter((u) => u.id !== state.unit);
+  if (!others.some((u) => u.id === state.partner)) {
+    // Default: a unit the connection test linked to the selected one, else the first.
+    const me = state.rows.find((u) => u.id === state.unit);
+    const linked = [...(me?.conn_to || []), ...(me?.conn_from || [])];
+    state.partner = linked.find((id) => others.some((u) => u.id === id)) ?? others[0]?.id ?? null;
+  }
+  $('partner').innerHTML = others.map((u) =>
+    `<option value="${esc(u.id)}" ${u.id === state.partner ? 'selected' : ''}>${esc(u.id)}${u.region_level ? ` · ${esc(u.region_level)}` : ''}</option>`).join('');
+}
+function renderPairFacts(d) {
+  const close = d.close == null ? `<div>Close pair: can't tell (${esc(d.close_why)}).</div>`
+    : d.close ? `<div class="flag">Close pair: sites within ${d.close_um} µm on one probe. Sorting misses their near-simultaneous spikes; the dip at zero lag that leaves can make an apparent excess nearby.</div>`
+      : '<div>Not a close pair.</div>';
+  const tests = d.tests.length ? d.tests.map((t) =>
+    `<div>${esc(t.pre)} → ${esc(t.post)}: ${t.observed} pairs vs ${t.expected.toFixed(1)} expected, q = ${t.q.toPrecision(2)} · ` +
+    `${t.connected ? '<b>putative excitatory connection</b>' : 'not labelled'}</div>`).join('')
+    : '<div>Connection test not run for these units (Connections, in the left rail).</div>';
+  $('pairFacts').innerHTML = close + tests;
+}
+async function plotPair() {
+  renderPartners();
+  if (!state.unit || !state.partner) { $('pairFacts').textContent = 'Needs another shown unit.'; return; }
+  const seq = ++latest.pairFacts;
+  const q = params({ unit: state.unit, partner: state.partner });
+  try {
+    const d = await getJSON('/api/pair?' + q);
+    if (seq !== latest.pairFacts) return;
+    renderPairFacts(d);
+  } catch (e) {
+    $('pairErr').textContent = e.message;
+    return;
+  }
+  fetchPlot('pair', '/api/pair.png?' + q, $('pairImg'), $('pairCaption'), $('pairErr'));
+}
+
 function showUnitTab(tab) {
   state.unitTab = tab;
   for (const b of $('unitTabs').querySelectorAll('button')) b.setAttribute('aria-pressed', b.dataset.tab === tab);
+  $('pairsPane').hidden = tab !== 'pairs';
   $('qualityPane').hidden = tab !== 'quality';
   $('activityPane').hidden = tab !== 'activity';
   wheelUrl = '';  // redraw the activity plots when coming back to them
@@ -839,6 +913,8 @@ $('unitTabs').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (b && b.dataset.tab !== state.unitTab) showUnitTab(b.dataset.tab);
 });
+$('runConn').addEventListener('click', runConnections);
+$('partner').addEventListener('change', () => { state.partner = $('partner').value; plotPair(); });
 $('trialPrev').addEventListener('click', () => stepTrial(-1));
 $('trialNext').addEventListener('click', () => stepTrial(+1));
 $('trialNo').addEventListener('change', () => openTrial($('trialNo').value === '' ? null : Math.trunc(+$('trialNo').value)));

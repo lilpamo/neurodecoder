@@ -51,6 +51,13 @@ from neurodecoder.analysis.conditions import (
     condition,
     split_event_times,
 )
+from neurodecoder.analysis.correlograms import (
+    close_pairs,
+    connections,
+    cross_correlogram,
+    jitter_expected_ccg,
+    load_correlogram_config,
+)
 from neurodecoder.analysis.events import EVENTS, available_events, event_times, trial_event_times
 from neurodecoder.analysis.movement import (
     load_movement_config,
@@ -122,6 +129,7 @@ from neurodecoder.studio.sets import list_sets, read_set, save_set, set_path
 from neurodecoder.viz.studio_plots import (
     THEMES,
     TraceGroup,
+    ccg_figure,
     condition_colours,
     lab_colours,
     population_figure,
@@ -165,6 +173,9 @@ class Studio:
         # IBL's per-criterion metrics. None when not downloaded.
         self.ibl_alf = ibl_alf
         self.quality_cfg = load_quality_config()
+        self.ccg_cfg = load_correlogram_config()
+        # The exact shown unit set -> connections result: BH ran over its pairs.
+        self._connections: dict[tuple, pd.DataFrame] = {}
         self._ibl_criteria: dict[str, pd.DataFrame | str] = {}
         self.qc = qc
         self.source = source  # where the session came from; recorded in projects and exports
@@ -279,6 +290,14 @@ class Studio:
                     list(self.movement_cfg.pre_window),
                     list(self.movement_cfg.post_window),
                 ],
+            },
+            "correlograms": {
+                "max_units": self.ccg_cfg.max_units,
+                "window_s": self.ccg_cfg.window_s,
+                "jitter_s": self.ccg_cfg.jitter_s,
+                "synaptic_window_s": list(self.ccg_cfg.synaptic_window_s),
+                "close_um": self.ccg_cfg.close_um,
+                "null": self.ccg_cfg.null,
             },
             "trial_view": {
                 "numbering": NUMBERING,
@@ -395,6 +414,17 @@ class Studio:
         if chosen is not None:
             t = chosen.reindex(rows.index)
             rows = rows.assign(sel_auroc=t["auroc"], sel_p=t["p"], sel_q=t["q"], sel=t["selective"])
+        tested_pairs = self._connections.get(self._pairs_key(q))
+        if tested_pairs is not None:
+            hit = tested_pairs[tested_pairs["connected"]]
+            to = hit.groupby("pre")["post"].apply(list)
+            frm = hit.groupby("post")["pre"].apply(list)
+            rows = rows.assign(
+                conn_out=hit["pre"].value_counts().reindex(rows.index, fill_value=0),
+                conn_in=hit["post"].value_counts().reindex(rows.index, fill_value=0),
+                conn_to=[to.get(u, []) for u in rows.index],
+                conn_from=[frm.get(u, []) for u in rows.index],
+            )
         return {
             "level": self._level(q) if self.has_regions else None,
             "units": _records(rows.reset_index().rename(columns={"unit_id": "id"})),
@@ -405,7 +435,95 @@ class Studio:
             "selectivity": None if chosen is None else self._selectivity_summary(chosen, q),
             "trials": self._trial_summary(q),
             "locking": None if locking is None else self._locking_summary(locking),
+            "connections": (
+                None if tested_pairs is None else self._connections_summary(tested_pairs)
+            ),
         }
+
+    def _pairs_key(self, q: dict) -> tuple:
+        """A connections result belongs to exactly the units shown when it ran."""
+        return tuple(self._select(q))
+
+    def connections_json(self, q: dict) -> dict:
+        """Run (or reuse) the connection test on every pair of shown units."""
+        key = self._pairs_key(q)
+        if key not in self._connections:
+            self._connections[key] = connections(
+                self.session.spikes, list(key), self.units, self.ccg_cfg, self.response_cfg.alpha
+            )
+        return self._connections_summary(self._connections[key])
+
+    def _connections_summary(self, t: pd.DataFrame) -> dict:
+        hit = t[t["connected"]]
+        units = sorted(set(t["pre"]))
+        return {
+            "n_units": len(units),
+            "n_pairs": len(t) // 2,
+            "n_tests": int(t["n_tests"].iloc[0]),
+            "n_connected": len(hit),
+            "n_connected_close": int(hit["close"].eq(True).sum()),
+            "null": t["null"].iloc[0],
+            "window_s": list(self.ccg_cfg.synaptic_window_s),
+            "alpha": self.response_cfg.alpha,
+            "probes": sorted(self.units.loc[units, "probe"].unique()),
+        }
+
+    def pair_data(self, q: dict) -> dict:
+        """The selected unit's cross-correlogram with a partner, its jitter expectation,
+        and the connection tests for the pair when they were run."""
+        unit, partner = q.get("unit"), q.get("partner")
+        if not partner:
+            raise ValueError("choose a partner unit")
+        for u in (unit, partner):
+            if u not in self.units.index:
+                raise ValueError(f"no unit {u!r} in this session")
+        if unit == partner:
+            raise ValueError("choose a partner other than the selected unit")
+        cfg = self.ccg_cfg
+        a, b = self.session.spikes[unit], self.session.spikes[partner]
+        lags, observed = cross_correlogram(a, b, cfg.window_s, cfg.bin_s)
+        expected = jitter_expected_ccg(a, b, cfg.window_s, cfg.bin_s, cfg.jitter_s)
+        (close,), (close_why,) = close_pairs(self.units, [(unit, partner)], cfg.close_um)
+        tested = self._connections.get(self._pairs_key(q))
+        tests = []
+        if tested is not None:
+            mine = tested[
+                ((tested["pre"] == unit) & (tested["post"] == partner))
+                | ((tested["pre"] == partner) & (tested["post"] == unit))
+            ]
+            tests = _records(mine[["pre", "post", "observed", "expected", "p", "q", "connected"]])
+        l1, l2 = (x * 1000 for x in cfg.synaptic_window_s)
+        caption = (
+            f"{unit} → {partner} · cross-correlogram over the whole session · "
+            f"{a.size:,} and {b.size:,} spikes · line: expected under {cfg.null} · "
+            f"shaded: the synaptic window tested, {l1:g} to {l2:g} ms"
+        )
+        return {
+            "lags": lags,
+            "observed": observed,
+            "expected": expected,
+            "close": close,
+            "close_why": close_why,
+            "tests": tests,
+            "caption": caption,
+        }
+
+    def pair_json(self, q: dict) -> dict:
+        d = self.pair_data(q)
+        return {k: d[k] for k in ("close", "close_why", "tests", "caption")} | {
+            "close_um": self.ccg_cfg.close_um
+        }
+
+    def pair_png(self, q: dict) -> tuple[bytes, dict]:
+        d = self.pair_data(q)
+        png = ccg_figure(
+            d["lags"],
+            d["observed"],
+            d["expected"],
+            self.ccg_cfg.synaptic_window_s,
+            q.get("theme", "light"),
+        )
+        return png, {"X-Caption": quote(d["caption"])}
 
     def _locking_key(self, q: dict) -> tuple:
         """Locking is to each trial's own first movement: no event in the key."""
@@ -1146,6 +1264,9 @@ _SESSION_ROUTES = {
     "/api/trial": ("application/json", "trial_json"),
     "/api/trial.png": ("image/png", "trial_png"),
     "/api/quality": ("application/json", "quality_json"),
+    "/api/connections": ("application/json", "connections_json"),
+    "/api/pair": ("application/json", "pair_json"),
+    "/api/pair.png": ("image/png", "pair_png"),
     "/api/quality.png": ("image/png", "quality_png"),
     "/api/tuning.png": ("image/png", "tuning_png"),
     "/api/unit.png": ("image/png", "unit_png"),

@@ -131,7 +131,14 @@ def test_trial_filters_round_trip_through_a_project(tmp_path):
 def test_every_config_behind_a_labelled_result_is_hashed(tmp_path):
     _, _, path = _saved(tmp_path)
     saved = json.loads(path.read_text())
-    assert set(saved["configs"]) == {"qc", "analysis", "selectivity", "movement", "trial_view"}
+    assert set(saved["configs"]) == {
+        "qc",
+        "analysis",
+        "selectivity",
+        "movement",
+        "trial_view",
+        "correlograms",
+    }
     assert saved["configs"]["movement"]["path"] == "configs/movement.yaml"
     # Files saved before a config was recorded say so, rather than failing to open.
     del saved["configs"]["movement"]

@@ -7,10 +7,9 @@ sessions in the ONE cache, IBL's own label criteria.
 - **ISI histogram:** intervals between consecutive spikes, 0 to `isi_max_s`,
   half-open bins; longer intervals counted, not dropped.
 - **Autocorrelogram:** lags between ordered pairs of different spikes (i != j), in
-  bins centred on multiples of `acg_bin_s` up to `acg_window_s`. It is symmetric: a
-  pair at +lag and -lag land in mirrored bins (a lag exactly halfway between two
-  centres goes to the one further from zero). Two spikes at one time are a pair at
-  lag 0.
+  bins centred on multiples of `acg_bin_s` up to `acg_window_s`, each [c - b/2,
+  c + b/2): the cross-correlogram's binning (analysis.correlograms). Two spikes at
+  one time are a pair at lag 0.
 - **Presence ratio:** IBL's definition (brainbox quick_unit_metrics): bins of
   `presence_window_s` from the probe's first spike, np.arange(start, end + w/2, w) of
   them, and the fraction with a spike. On d23a44ef probe00 it equals IBL's stored
@@ -27,6 +26,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+from neurodecoder.analysis.correlograms import cross_correlogram
 from neurodecoder.data.cluster_files import Waveform
 from neurodecoder.qc.refractory import RefractoryDetails, sliding_rp_details
 
@@ -74,21 +74,13 @@ def isi_histogram(
 def autocorrelogram(
     times: np.ndarray, window_s: float, bin_s: float
 ) -> tuple[np.ndarray, np.ndarray]:
-    """(lags (2k + 1,), counts (2k + 1,)), k = window_s / bin_s, symmetric about 0."""
+    """(lags (2k + 1,), counts (2k + 1,)), k = window_s / bin_s: the cross-correlogram
+    of the train with itself (analysis.correlograms), less each spike's pair with
+    itself at lag 0."""
     t = np.asarray(times, np.float64)
-    k = _n_bins(window_s, bin_s)
-    counts = np.zeros(2 * k + 1, np.int64)
-    reach = (k + 0.5) * bin_s
-    for shift in range(1, t.size):
-        lags = t[shift:] - t[:-shift]  # (n - shift,) lags to the shift-th next spike
-        close = lags < reach
-        if not close.any():
-            break
-        index = np.floor(lags[close] / bin_s + 0.5 + 1e-9).astype(np.int64)
-        index = index[index <= k]  # a lag a hair under the edge can round past it
-        np.add.at(counts, k + index, 1)
-        np.add.at(counts, k - index, 1)
-    return bin_s * np.arange(-k, k + 1), counts
+    lags, counts = cross_correlogram(t, t, window_s, bin_s)
+    counts[counts.size // 2] -= t.size
+    return lags, counts
 
 
 def presence_ratio(

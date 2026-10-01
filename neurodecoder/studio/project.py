@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from neurodecoder.analysis.correlograms import DEFAULT_CONFIG as CORRELOGRAM_CONFIG
 from neurodecoder.analysis.movement import DEFAULT_CONFIG as MOVEMENT_CONFIG
 from neurodecoder.analysis.responsiveness import DEFAULT_CONFIG as ANALYSIS_CONFIG
 from neurodecoder.analysis.trial_view import DEFAULT_CONFIG as TRIAL_VIEW_CONFIG
@@ -78,6 +79,8 @@ DEFAULT_VIEW = {
     "trial_n": 1,
     "trial_all": False,  # step through every trial, not only those passing the filters
     "trial_traces": [],  # optional behaviour traces (analysis.trial_view.TRACES)
+    # The selected unit's partner in the Pairs tab (analysis.correlograms); added later.
+    "partner": None,
 }
 
 
@@ -146,6 +149,7 @@ def _configs(qc) -> dict:
             ("selectivity", Path(SELECTIVITY_CONFIG)),
             ("movement", Path(MOVEMENT_CONFIG)),
             ("trial_view", Path(TRIAL_VIEW_CONFIG)),
+            ("correlograms", Path(CORRELOGRAM_CONFIG)),
         )
     }
 

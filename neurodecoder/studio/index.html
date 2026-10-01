@@ -61,6 +61,12 @@
       <p class="note" id="lockSummary"></p>
     </section>
     <section>
+      <h2>Connections</h2>
+      <p class="note" id="connWhat"></p>
+      <button class="btn" id="runConn">Test pairs among shown units</button>
+      <p class="note" id="connSummary"></p>
+    </section>
+    <section>
       <h2>Region level</h2>
       <div class="seg" id="level" role="group" aria-label="Region level"></div>
       <p class="note" id="levelNote"></p>
@@ -85,7 +91,7 @@
       <section class="card area-table">
         <header><h3>Units</h3><span class="meta" id="tableMeta"></span></header>
         <div class="table"><table>
-          <thead><tr><th>Unit</th><th>Region</th><th class="num">Depth µm</th><th class="num">Rate Hz</th><th>Label</th><th>QC</th><th title="Responsive to this event (q &lt; alpha)">Resp.</th><th class="num" title="Selectivity: AUROC between the split's two conditions; * when q &lt; alpha">Sel.</th><th title="Locked to the trial's first movement (q &lt; alpha): rate up or down after it">Mov.</th></tr></thead>
+          <thead><tr><th>Unit</th><th>Region</th><th class="num">Depth µm</th><th class="num">Rate Hz</th><th>Label</th><th>QC</th><th title="Responsive to this event (q &lt; alpha)">Resp.</th><th class="num" title="Selectivity: AUROC between the split's two conditions; * when q &lt; alpha">Sel.</th><th title="Locked to the trial's first movement (q &lt; alpha): rate up or down after it">Mov.</th><th title="Putative excitatory connections among the units tested: outgoing → and incoming ←">Conn.</th></tr></thead>
           <tbody id="rows"></tbody>
         </table></div>
       </section>
@@ -95,6 +101,7 @@
           <div class="seg tabs" id="unitTabs" role="group" aria-label="Unit view">
             <button data-tab="activity" aria-pressed="true">Activity</button>
             <button data-tab="quality" aria-pressed="false">Quality</button>
+            <button data-tab="pairs" aria-pressed="false">Pairs</button>
           </div>
         </header>
         <div id="qualityPane" hidden>
@@ -102,6 +109,13 @@
           <div class="qualityfacts" id="qualityFacts"></div>
           <img id="qualityImg" alt="ISI histogram, autocorrelogram, refractory test, rate across the session and mean waveform">
           <p class="err" id="qualityErr"></p>
+        </div>
+        <div id="pairsPane" hidden>
+          <label class="partner">Partner <select id="partner"></select></label>
+          <div class="qualityfacts" id="pairFacts"></div>
+          <p class="caption" id="pairCaption"></p>
+          <img id="pairImg" alt="Cross-correlogram of the selected unit and its partner, with its expectation under jitter">
+          <p class="err" id="pairErr"></p>
         </div>
         <div id="activityPane">
         <p class="caption" id="unitCaption"></p>

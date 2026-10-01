@@ -468,7 +468,17 @@ from config.
   probe00 cluster.
 - A presence ratio checked by hand.
 
-## 8. Cross-correlograms
+## 8. Cross-correlograms — built (2026-10-01)
+
+Built (`docs/DECISIONS.md`, "Cross-correlograms and putative connections").
+- **As planned:** interval jitter and BH across the pairs tested. The close-pair
+  flag is declared missing without site positions.
+- **Exact jitter null:** no seed, since nothing is random.
+- **Excitatory label only:** a strong peak makes a jitter "trough" in the reverse
+  direction, so inhibition is not labelled.
+- **Test set:** the shown units, at most 30.
+- **Flagged:** in LP all 6 labelled pairs are close pairs. Whether to exclude close
+  pairs from the test is open.
 
 **Adds:**
 - **Views:** cross-correlograms for chosen pairs, within or across probes, raw
