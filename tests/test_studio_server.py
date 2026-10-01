@@ -341,7 +341,58 @@ def test_the_trial_view_on_real_data(tmp_path):
     assert len(headers["X-Trials"].split(",")) == 290 and "1" not in headers["X-Trials"].split(",")
     view = {**DEFAULT_VIEW, "unit": "probe00_3", "trials": {"bwm_include": True}, "trial": 12}
     out = export_view(studio, view, tmp_path / "runs")
+    assert {"quality.svg", "quality.pdf", "quality.json"} <= {p.name for p in out.iterdir()}
     sidecar = json.loads((out / "trial.json").read_text())
     assert len(sidecar["rows"]) == 390 and sidecar["window"]["trial"] == 12
     assert {e["label"] for e in sidecar["events"]} >= {"stimulus on", "feedback: reward"}
     assert json.loads((out / "unit.json").read_text())["trials"]["n_kept"] == 290
+
+
+def test_the_quality_panel_on_a_phy_folder(tmp_path):
+    from neurodecoder.studio.project import Source
+
+    studio = _studio(tmp_path)  # no templates in the folder
+    studio.source = Source(
+        kind="phy", folder=str(tmp_path / "imec0"), events=str(tmp_path / "events.csv")
+    )
+    d = studio.quality_json({"unit": "imec0_3"})
+    assert d["n_spikes"] == 3 and d["qc"]["config"] == "configs/qc_phy.yaml"
+    assert d["refractory"]["used_by_qc"] is True and d["refractory"]["passed"] is False
+    assert d["waveform"] is None
+    assert d["waveform_missing"].startswith("this Phy folder has no templates.npy")
+    assert d["ibl_criteria"] is None and d["ibl_missing"].startswith("not for Phy folders")
+    png, headers = studio.quality_png({"unit": "imec0_3", "theme": "dark"})
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert unquote(headers["X-Caption"]).startswith("imec0_3 · quality, descriptive")
+    with pytest.raises(ValueError, match="no unit 'nope'"):
+        studio.quality_json({"unit": "nope"})
+
+
+def test_the_quality_panel_on_real_data():
+    from neurodecoder.data.cluster_files import ibl_session_folder
+    from neurodecoder.data.load import load_data_config, load_session
+    from neurodecoder.data.manifest import MANIFEST_VERSION, read_manifest
+    from neurodecoder.qc.units import load_qc_config
+    from neurodecoder.studio.project import Source
+
+    eid = "d23a44ef-1402-4ed7-97f5-47e9a7a504d9"
+    data = load_data_config()
+    try:
+        session = load_session(eid, "bwm")
+        sessions = read_manifest(data.derived_root / f"manifest-v{MANIFEST_VERSION}").sessions
+    except (OSError, ValueError) as e:
+        pytest.skip(f"d23a44ef or the manifest not available: {e}")
+    alf = ibl_session_folder(data.one_cache_root, sessions, eid)
+    if alf is None:
+        pytest.skip("d23a44ef is not in the local ONE cache")
+    source = Source(kind="ibl", eid=eid, backend="bwm")
+    studio = Studio(session, load_qc_config(), data.data_root / "atlas", source, ibl_alf=alf)
+    d = studio.quality_json({"unit": "probe00_3"})
+    assert d["waveform"] == {"unit": "µV", "source": "clusters.waveforms.npy (IBL)"}
+    assert d["ibl_criteria"]["label"] == session.units.at["probe00_3", "label"]
+    assert d["refractory"]["used_by_qc"] is False and d["refractory"]["contamination"] == 0.1
+    assert d["qc"]["passed"] is True and d["qc"]["reasons"] == []
+    other = studio.quality_json({"unit": studio.units.index[studio.units["probe"] == "probe01"][0]})
+    # The cache has probe01's metrics but not its waveforms: the panel names the file.
+    assert other["waveform"] is None and "clusters.waveforms.npy" in other["waveform_missing"]
+    assert other["ibl_criteria"] is not None

@@ -17,6 +17,8 @@ As in ibllib: spike times are truncated to 20 kHz samples, correlogram bins are
 autocorrelogram's mean from 0.5 to 1 s.
 """
 
+from dataclasses import dataclass
+
 import numpy as np
 from scipy import stats
 
@@ -52,12 +54,13 @@ def max_acceptable_violations(
     return bound
 
 
-def sliding_rp_pass(times: np.ndarray, contamination: float, alpha: float) -> bool:
-    """Whether a unit's spike train, (n_spikes,) seconds sorted, passes the test."""
+def _prepare(times: np.ndarray) -> tuple[np.ndarray, float, float] | None:
+    """(samples, duration_s, rate_hz) as IBL computes them; None for fewer than two
+    distinct spike times, which fail."""
     times = np.asarray(times, np.float64)
     assert times.ndim == 1
     if times.size == 0 or not times[-1] > times[0]:
-        return False
+        return None
     duration = times[-1] - times[0]
     samples = (times * _RATE_HZ).astype(np.int64)
     n = samples.size
@@ -66,7 +69,15 @@ def sliding_rp_pass(times: np.ndarray, contamination: float, alpha: float) -> bo
     in_window = pairs_closer_than(samples, _ACG_BINS * _BIN_SAMPLES) - pairs_closer_than(
         samples, _RATE_FROM_BIN * _BIN_SAMPLES
     )
-    rate = in_window / n / _BIN_S / _RATE_FROM_BIN
+    return samples, duration, in_window / n / _BIN_S / _RATE_FROM_BIN
+
+
+def sliding_rp_pass(times: np.ndarray, contamination: float, alpha: float) -> bool:
+    """Whether a unit's spike train, (n_spikes,) seconds sorted, passes the test."""
+    prepared = _prepare(times)
+    if prepared is None:
+        return False
+    samples, duration, rate = prepared
     for index in _TEST_BINS:
         # Cumulative autocorrelogram through bin `index`, tested at RP = index bins.
         violations = pairs_closer_than(samples, (index + 1) * _BIN_SAMPLES)
@@ -74,3 +85,47 @@ def sliding_rp_pass(times: np.ndarray, contamination: float, alpha: float) -> bo
         if violations <= max_acceptable_violations(rate, rp, duration, rate * contamination, alpha):
             return True
     return False
+
+
+@dataclass(frozen=True)
+class RefractoryDetails:
+    """The test at every refractory period, for display. rp_s, violations and
+    max_acceptable are (n_rp,); a period passes where violations <= max_acceptable
+    (a bound of -1 means no count can pass there). why: set when there is no table."""
+
+    rp_s: np.ndarray
+    violations: np.ndarray
+    max_acceptable: np.ndarray
+    rate_hz: float
+    duration_s: float
+    contamination: float
+    alpha: float
+    why: str = ""
+
+    @property
+    def passed(self) -> bool:
+        return bool((self.violations <= self.max_acceptable).any())
+
+    @property
+    def first_pass_rp_s(self) -> float | None:
+        ok = np.flatnonzero(self.violations <= self.max_acceptable)
+        return float(self.rp_s[ok[0]]) if ok.size else None
+
+
+def sliding_rp_details(times: np.ndarray, contamination: float, alpha: float) -> RefractoryDetails:
+    """sliding_rp_pass's test at every refractory period, not stopping at the first
+    pass. Its verdict (`passed`) is sliding_rp_pass's; tests check that on real units."""
+    prepared = _prepare(times)
+    if prepared is None:
+        empty = np.empty(0)
+        why = "fewer than two distinct spike times"
+        return RefractoryDetails(empty, empty, empty, np.nan, 0.0, contamination, alpha, why)
+    samples, duration, rate = prepared
+    rp = np.array([index * _BIN_S + 1e-6 for index in _TEST_BINS])
+    violations = np.array(
+        [pairs_closer_than(samples, (index + 1) * _BIN_SAMPLES) for index in _TEST_BINS], float
+    )
+    bound = np.array(
+        [max_acceptable_violations(rate, r, duration, rate * contamination, alpha) for r in rp]
+    )
+    return RefractoryDetails(rp, violations, bound, rate, duration, contamination, alpha)

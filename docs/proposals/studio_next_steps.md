@@ -429,7 +429,16 @@ has no wheel or cameras, so those traces are disabled with the reason.
 - "Next" skips trials failing the trial filter; the toggle includes them.
 - A project round trip keeps the trial view state.
 
-## 7. Unit quality panel
+## 7. Unit quality panel — built (2026-10-01)
+
+Built (`docs/DECISIONS.md`, "Unit quality panel").
+- **As planned:** everything below, as a Quality tab beside Activity in the
+  Selected unit card.
+- **IBL label criteria:** IBL's three label criteria, from the ONE cache when the
+  session is there.
+- **Waveforms:** read from local files only. IBL's are found through the manifest.
+- **Presence ratio:** it matches IBL's stored values exactly on d23a44ef probe00.
+- **Not built: drift.** Sessions don't load per-spike depths.
 
 **Adds:** a per-unit panel showing:
 - the ISI histogram with refractory lines;

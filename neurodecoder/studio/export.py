@@ -7,6 +7,8 @@ Each export is a new `runs/<run_id>/` folder (run_id = UTC time + "_studio"):
   session has a wheel;
 - `trial.svg`, `trial.pdf`, `trial.json`: the single-trial view, when a trial is
   chosen, with every spike time and event time it plots;
+- `quality.svg`, `quality.pdf`, `quality.json`: the selected unit's quality panel,
+  with every count, test row and waveform sample it plots;
 - `responsiveness.csv`, when the test was run for this event (on all trials or on
   movement-free trials only, as the view says);
 - `selectivity.csv` and `movement_locking.csv`, when those tests were run;
@@ -34,6 +36,7 @@ import numpy as np
 from neurodecoder.studio.project import REPO, make_project, view_to_query
 from neurodecoder.viz.studio_plots import (
     build_population_figure,
+    build_quality_figure,
     build_trial_figure,
     build_tuning_figure,
     build_unit_figure,
@@ -186,6 +189,35 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
             },
         )
         files += ["wheel.svg", "wheel.pdf", "wheel.json"]
+
+    if view.get("unit"):
+        d = studio.quality_data(q)
+        uq = d["quality"]
+        fig = build_quality_figure(uq, THEME, d["caption"])
+        for suffix in ("svg", "pdf"):
+            save_vector(fig, out / f"quality.{suffix}")
+        rd = uq.refractory
+        _write_json(
+            out / "quality.json",
+            {
+                **studio.quality_json(q),
+                "span_s": uq.span_s,
+                "isi": {"edges_s": uq.isi[0], "counts": uq.isi[1], "beyond_max": uq.isi[2]},
+                "autocorrelogram": {"lags_s": uq.acg[0], "counts": uq.acg[1]},
+                "refractory_test": {
+                    "rp_s": rd.rp_s,
+                    "violations": rd.violations,
+                    "max_acceptable": rd.max_acceptable,
+                    "rate_hz": rd.rate_hz,
+                    "duration_s": rd.duration_s,
+                },
+                "presence_counts": uq.presence[1],
+                "rate": {"centres_s": uq.rate[0], "rate_hz": uq.rate[1]},
+                "waveform_samples": None if uq.waveform is None else uq.waveform.samples_uv,
+                "waveform_channels": None if uq.waveform is None else uq.waveform.channels,
+            },
+        )
+        files += ["quality.svg", "quality.pdf", "quality.json"]
 
     if view.get("trial") is not None:
         t = studio.trial_data(q)

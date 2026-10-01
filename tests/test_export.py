@@ -50,6 +50,9 @@ def test_export_writes_vector_figures_sidecars_and_a_manifest(tmp_path):
         "population.svg",
         "population.pdf",
         "population.json",
+        "quality.svg",
+        "quality.pdf",
+        "quality.json",
         "manifest.json",
     }
     assert (out / "unit.pdf").read_bytes()[:5] == b"%PDF-"

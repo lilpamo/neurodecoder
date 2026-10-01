@@ -6,6 +6,66 @@ first.
 
 ---
 
+### 2026-10-01 — Unit quality panel (`analysis/unit_quality.py`, `data/cluster_files.py`, `configs/unit_quality.yaml`)
+
+**What (the user's step 7):** a Quality tab beside Activity in the Selected unit
+card. It shows the QC verdicts already computed and labels nothing new.
+- **ISI histogram and autocorrelogram.**
+- **The sliding refractory-period test at every period tested:** violations against
+  the most allowed, and where the unit first passes.
+- **Rate across the session,** with IBL's presence ratio.
+- **The mean waveform,** when there is one.
+- **Every QC reason,** and for IBL sessions in the ONE cache, the three criteria
+  behind IBL's `label` with their values.
+
+Export adds `quality.svg/.pdf/.json`, with every count, test row and waveform
+sample.
+
+**Choices, flagged for review:**
+1. **The refractory details reuse the QC code.** `qc/refractory.sliding_rp_details`
+   shares its setup with `sliding_rp_pass` (moved into `_prepare`). The pass/fail
+   loop is unchanged.
+   - The pinned agreement with IBL's flags is still 553 of 674.
+   - A new test checks the details' verdict equals `sliding_rp_pass` on all 674
+     probe00 clusters.
+2. **For IBL sessions the panel runs the refractory test with IBL's settings**
+   (10% contamination, 90% confidence), for reference. Studio's IBL QC uses IBL's
+   label, and the panel says so. For Phy folders it is part of the QC, with
+   `configs/qc_phy.yaml`'s settings.
+3. **IBL's label criteria use IBL's fixed thresholds** (max confidence ≥ 90%, noise
+   cutoff < 5, median amplitude > 50 µV), from `brainbox` `compute_labels`. They
+   explain a stored label rather than make a new one. On d23a44ef probe00 they
+   reproduce IBL's `label` for all 674 clusters.
+4. **Presence ratio is IBL's definition, exactly:** 10 s bins from the first spike,
+   `np.arange(start, end + 5, 10)` of them. That includes a last bin no spike can
+   reach when the recording ends past the middle of a 10 s window.
+   - It equals IBL's stored value for all 674 probe00 clusters.
+   - In Studio, start and end are the first and last spikes of the probe's
+     *loaded* units. For BWM sessions (good units only) that can differ slightly
+     from IBL's span. No threshold is applied.
+5. **Waveforms come from local files only:**
+   - **IBL:** `clusters.waveforms.npy` in the ONE cache, in µV. The folder comes
+     from the manifest's lab, subject, date and session number, because ONE's
+     local mode can't resolve an eid offline.
+   - **Phy:** the spike-weighted mean template, unwhitened with
+     `whitening_mat_inv.npy`, in template units.
+   - **Otherwise:** a plain reason naming the missing files.
+   - On d23a44ef only probe00's waveforms are cached; probe01's panel says so.
+6. **No drift:** IBL's drift needs per-spike depths, which sessions don't load.
+   Per the plan, any drift label waits for IBL's definition and a config threshold.
+
+**A bug the server tests caught:** an autocorrelogram lag within rounding of the
+window's outer edge overflowed past the last bin. It's fixed, with a test.
+
+**Real data (d23a44ef):**
+- probe00_3: passes QC; the refractory test passes from 1.25 ms; IBL's label is 3
+  of 3 (max confidence 93%, noise cutoff −0.54, median amplitude 122 µV).
+- probe00_27: fails Studio's QC (task firing rate 0.0013 Hz), with a presence ratio
+  of 0.084.
+- Speed: the panel takes about 0.5 s per unit.
+
+**No new dependency.**
+
 ### 2026-10-01 — Single-trial view (`analysis/trial_view.py`, `configs/trial_view.yaml`)
 
 **What (the user's step 6b):** every shown unit's spikes in one trial, or a few

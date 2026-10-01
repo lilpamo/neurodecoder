@@ -86,11 +86,22 @@ from neurodecoder.analysis.tuning import (
     selectivity,
     tuning_curve,
 )
+from neurodecoder.analysis.unit_quality import load_quality_config, unit_quality
 from neurodecoder.analysis.units import unit_table
 from neurodecoder.data.atlas_meshes import mesh_path
 from neurodecoder.data.cache import SessionCache
+from neurodecoder.data.cluster_files import (
+    IBL_RP_ALPHA,
+    IBL_RP_CONTAMINATION,
+    ibl_criteria,
+    ibl_session_folder,
+    ibl_sorting_folder,
+    ibl_waveform,
+    phy_waveform,
+)
 from neurodecoder.data.load import DataConfig, key_parts, load_data_config
 from neurodecoder.data.manifest import MANIFEST_VERSION, Manifest, build_manifest
+from neurodecoder.qc.phy import PhyUnitQC
 from neurodecoder.studio.entry import (
     complete_phy_path,
     project_path,
@@ -115,6 +126,7 @@ from neurodecoder.viz.studio_plots import (
     lab_colours,
     population_figure,
     probe_colours,
+    quality_figure,
     trial_figure,
     tuning_figure,
     unit_figure,
@@ -146,8 +158,14 @@ class Studio:
         project_path: Path | None = None,
         view: dict | None = None,
         warnings: list[str] = (),
+        ibl_alf: Path | None = None,
     ):
         self.session = session
+        # The session's alf folder in the local ONE cache (IBL only): waveforms and
+        # IBL's per-criterion metrics. None when not downloaded.
+        self.ibl_alf = ibl_alf
+        self.quality_cfg = load_quality_config()
+        self._ibl_criteria: dict[str, pd.DataFrame | str] = {}
         self.qc = qc
         self.source = source  # where the session came from; recorded in projects and exports
         self.project_path = project_path
@@ -772,6 +790,131 @@ class Studio:
         }
         return png, headers
 
+    def _cluster_folder(self, probe: str) -> Path | str:
+        """The probe's IBL spike-sorting folder, or why there is none."""
+        if self.source is None or self.source.kind != "ibl":
+            return "not an IBL session"
+        if self.ibl_alf is None:
+            return (
+                "this session's spike sorting is not in the local ONE cache "
+                "(IBL's waveforms and per-criterion metrics are downloaded with ONE)"
+            )
+        folder = ibl_sorting_folder(self.ibl_alf, probe)
+        return folder or f"the ONE cache has no {probe} spike sorting for this session"
+
+    def _criteria(self, unit: str) -> tuple[dict | None, str]:
+        """IBL's label criteria for one unit, or why they are not shown."""
+        probe = self.units.at[unit, "probe"]
+        if probe not in self._ibl_criteria:
+            folder = self._cluster_folder(probe)
+            try:
+                self._ibl_criteria[probe] = (
+                    folder if isinstance(folder, str) else ibl_criteria(folder)
+                )
+            except ValueError as e:
+                self._ibl_criteria[probe] = str(e)
+        table = self._ibl_criteria[probe]
+        if isinstance(table, str):
+            return None, table
+        cluster = int(self.session.units.at[unit, "cluster_id"])
+        if cluster not in table.index:
+            return None, f"cluster {cluster} is not in IBL's metrics table"
+        row = table.loc[cluster]
+        return {k: (v.item() if hasattr(v, "item") else v) for k, v in row.items()}, ""
+
+    def _waveform(self, unit: str):
+        """(Waveform, "") or (None, why there is none)."""
+        cluster = int(self.session.units.at[unit, "cluster_id"])
+        try:
+            if self.source is not None and self.source.kind == "phy":
+                return phy_waveform(Path(self.source.folder), cluster), ""
+            folder = self._cluster_folder(self.units.at[unit, "probe"])
+            if isinstance(folder, str):
+                return None, folder
+            return ibl_waveform(folder, cluster), ""
+        except ValueError as e:
+            return None, str(e)
+
+    def quality_data(self, q: dict) -> dict:
+        """The unit quality panel (analysis.unit_quality) and its caption."""
+        unit = q["unit"]
+        if unit not in self.units.index:
+            raise ValueError(f"no unit {unit!r} in this session")
+        phy = isinstance(self.qc, PhyUnitQC)
+        contamination, alpha = (
+            (self.qc.refractory_contamination, self.qc.refractory_alpha)
+            if phy
+            else (IBL_RP_CONTAMINATION, IBL_RP_ALPHA)
+        )
+        probe = self.units.at[unit, "probe"]
+        waveform, waveform_missing = self._waveform(unit)
+        criteria, ibl_missing = (
+            self._criteria(unit)
+            if not phy
+            else (None, "not for Phy folders (IBL's amplitude criteria need volts)")
+        )
+        uq = unit_quality(
+            self.session.spikes,
+            unit,
+            self.units.index[self.units["probe"] == probe],
+            self.units.loc[unit],
+            self.quality_cfg,
+            contamination,
+            alpha,
+            waveform,
+            waveform_missing,
+            criteria,
+            ibl_missing,
+        )
+        span = uq.span_s[1] - uq.span_s[0]
+        caption = (
+            f"{unit} · quality, descriptive (the QC verdicts already computed; no new test) · "
+            f"{uq.n_spikes:,} spikes over {span / 60:.1f} min of the probe's recording"
+        )
+        return {"quality": uq, "caption": caption, "rp_used_by_qc": phy}
+
+    def quality_json(self, q: dict) -> dict:
+        d = self.quality_data(q)
+        uq, rd = d["quality"], d["quality"].refractory
+        span = uq.span_s[1] - uq.span_s[0]
+        return {
+            "unit": uq.unit,
+            "caption": d["caption"],
+            "n_spikes": uq.n_spikes,
+            "rate_hz": uq.n_spikes / span if span > 0 else None,
+            "presence_ratio": uq.presence[0],
+            "presence_window_s": self.quality_cfg.presence_window_s,
+            "qc": {
+                "passed": uq.qc_passed,
+                "reasons": uq.qc_reasons,
+                "config": "configs/qc_phy.yaml" if d["rp_used_by_qc"] else "configs/qc.yaml",
+            },
+            "refractory": {
+                "passed": rd.passed,
+                "first_pass_rp_ms": (
+                    None if rd.first_pass_rp_s is None else rd.first_pass_rp_s * 1000
+                ),
+                "contamination": rd.contamination,
+                "confidence": 1 - rd.alpha,
+                "used_by_qc": d["rp_used_by_qc"],
+                "why": rd.why,
+            },
+            "ibl_criteria": uq.ibl_criteria,
+            "ibl_missing": uq.ibl_missing,
+            "waveform": (
+                None
+                if uq.waveform is None
+                else {"unit": uq.waveform.unit, "source": uq.waveform.source}
+            ),
+            "waveform_missing": uq.waveform_missing,
+        }
+
+    def quality_png(self, q: dict) -> tuple[bytes, dict]:
+        d = self.quality_data(q)
+        return quality_figure(d["quality"], q.get("theme", "light")), {
+            "X-Caption": quote(d["caption"])
+        }
+
     def mesh(self, structure_id: int) -> bytes:
         return mesh_path(structure_id, self.atlas_root).read_bytes()
 
@@ -932,7 +1075,9 @@ class App:
             project, session, qc, warnings = open_project(path)
             source = Source(**{k: v for k, v in project["source"].items() if k != "release"})
             atlas = self.data.data_root / "atlas"
-            self.studio = Studio(session, qc, atlas, source, path, project["view"], warnings)
+            self.studio = Studio(
+                session, qc, atlas, source, path, project["view"], warnings, self.ibl_alf(source)
+            )
             return {"eid": session.eid, "url": "/session", "warnings": warnings}
         if kind == "phy":
             folder, events = resolve_phy_folder(self.phy_root, str(body.get("path", "")))
@@ -953,8 +1098,15 @@ class App:
             chosen = default_trials(session.trials, self.catalog_cfg)
         view = {**DEFAULT_VIEW, "trials": chosen.to_dict()}
         path = _new_project_path(self.data.data_root / "projects", name)
-        self.studio = Studio(session, qc, self.data.data_root / "atlas", source, path, view)
+        atlas = self.data.data_root / "atlas"
+        self.studio = Studio(session, qc, atlas, source, path, view, [], self.ibl_alf(source))
         return {"eid": session.eid, "url": "/session"}
+
+    def ibl_alf(self, source: Source) -> Path | None:
+        """An IBL session's alf folder in the local ONE cache, found from the manifest."""
+        if source.kind != "ibl":
+            return None
+        return ibl_session_folder(self.data.one_cache_root, self.manifest.sessions, source.eid)
 
 
 def default_trials(trials: pd.DataFrame, cfg) -> TrialFilter:
@@ -993,6 +1145,8 @@ _SESSION_ROUTES = {
     "/api/wheel.png": ("image/png", "wheel_png"),
     "/api/trial": ("application/json", "trial_json"),
     "/api/trial.png": ("image/png", "trial_png"),
+    "/api/quality": ("application/json", "quality_json"),
+    "/api/quality.png": ("image/png", "quality_png"),
     "/api/tuning.png": ("image/png", "tuning_png"),
     "/api/unit.png": ("image/png", "unit_png"),
     "/api/population.png": ("image/png", "population_png"),
@@ -1150,8 +1304,10 @@ def build_app(argv: list[str]) -> tuple[App, str]:
         # The same default as opening from the homepage; a project keeps its own.
         trials = default_trials(session.trials, load_catalog_config())
         view = {**DEFAULT_VIEW, "trials": trials.to_dict()}
-    studio = Studio(session, qc, data.data_root / "atlas", source, path, view, warnings)
-    return App(data, studio=studio), "/session"
+    app = App(data)
+    atlas = data.data_root / "atlas"
+    app.studio = Studio(session, qc, atlas, source, path, view, warnings, app.ibl_alf(source))
+    return app, "/session"
 
 
 def main() -> None:

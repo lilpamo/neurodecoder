@@ -600,3 +600,139 @@ def trial_figure(view, row_regions, region_colours, selected, theme) -> tuple[by
     """build_trial_figure as a PNG for the page, with the raster's box."""
     fig, raster_box = build_trial_figure(view, row_regions, region_colours, selected, theme)
     return _png(fig), raster_box
+
+
+def build_quality_figure(q, theme: str, title=None) -> Figure:
+    """The unit quality panel (analysis.unit_quality.UnitQuality): ISI histogram and
+    autocorrelogram, the sliding refractory-period test at every period tested, the
+    rate across the session, and the mean waveform when there is one. Shows QC already
+    computed; labels nothing."""
+    t = _theme(theme)
+    fig = Figure(figsize=(5.6, 7.8))
+    add, _ = _frame(fig, title, t["ink2"])
+    ax_isi = add((0.13, 0.80, 0.36, 0.155))
+    ax_acg = add((0.61, 0.80, 0.36, 0.155))
+    ax_rp = add((0.13, 0.565, 0.84, 0.15))
+    ax_rate = add((0.13, 0.345, 0.84, 0.135))
+    ax_wf = add((0.13, 0.06, 0.84, 0.19))
+    rd = q.refractory
+
+    edges, counts, beyond = q.isi
+    ax_isi.stairs(counts, edges * 1000, color=t["series"], fill=True, alpha=0.85)
+    if rd.first_pass_rp_s is not None:
+        ax_isi.axvline(rd.first_pass_rp_s * 1000, color=t["ink"], lw=1, ls=(0, (3, 2)))
+    ax_isi.set_xlim(0, edges[-1] * 1000)
+    ax_isi.set_xlabel("interspike interval (ms)")
+    ax_isi.set_ylabel("count")
+    where = (
+        f"dashed: {rd.first_pass_rp_s * 1000:.2f} ms, where the RP test first passes\n"
+        if rd.first_pass_rp_s is not None
+        else ""
+    )
+    ax_isi.set_title(
+        f"{where}{beyond:,} intervals ≥ {edges[-1] * 1000:g} ms not shown",
+        size=6.5,
+        color=t["ink2"],
+    )
+
+    lags, acg = q.acg
+    width = (lags[1] - lags[0]) * 1000
+    ax_acg.bar(lags * 1000, acg, width=width, color=t["series"], lw=0)
+    ax_acg.set_xlim(lags[0] * 1000 - width / 2, lags[-1] * 1000 + width / 2)
+    ax_acg.set_xlabel("lag (ms)")
+    ax_acg.set_ylabel("spike pairs")
+
+    if rd.rp_s.size:
+        ms = rd.rp_s * 1000
+        ax_rp.plot(
+            ms,
+            rd.max_acceptable,
+            color=t["series"],
+            lw=1.6,
+            drawstyle="steps-mid",
+            label=f"most violations allowed ({rd.contamination:.0%} contamination, "
+            f"{1 - rd.alpha:.0%} confidence)",
+        )
+        ok = rd.violations <= rd.max_acceptable
+        ax_rp.plot(ms[ok], rd.violations[ok], "o", color=t["ink"], ms=4, label="violations: pass")
+        ax_rp.plot(
+            ms[~ok],
+            rd.violations[~ok],
+            "o",
+            mfc="none",
+            mec=t["ink"],
+            ms=4,
+            label="violations: fail",
+        )
+        ax_rp.set_yscale("symlog", linthresh=1)  # counts span 0 to thousands
+        ax_rp.set_xlabel("refractory period tested (ms)")
+        ax_rp.set_ylabel("spike pairs (log)")
+        ax_rp.legend(fontsize=6.5, frameon=False, labelcolor=t["ink2"], loc="best")
+        verdict = (
+            f"passes from {rd.first_pass_rp_s * 1000:.2f} ms"
+            if rd.passed
+            else "fails at every period tested"
+        )
+        ax_rp.set_title(f"Sliding refractory-period test: {verdict}", size=7.5, color=t["ink2"])
+    else:
+        ax_rp.text(
+            0.5,
+            0.5,
+            f"No refractory test: {rd.why}",
+            ha="center",
+            va="center",
+            transform=ax_rp.transAxes,
+            size=8,
+            color=t["ink2"],
+        )
+        ax_rp.set_axis_off()
+
+    centres, rate = q.rate
+    ax_rate.plot(centres / 60, rate, color=t["series"], lw=1.4, drawstyle="steps-mid")
+    ax_rate.set_xlabel("time in session (min)")
+    ax_rate.set_ylabel("rate (Hz)")
+    ax_rate.set_ylim(bottom=0)
+    ax_rate.set_title(
+        f"presence ratio {q.presence[0]:.3f} (IBL's 10 s bins)", size=7.5, color=t["ink2"]
+    )
+
+    w = q.waveform
+    if w is not None:
+        ptp = np.ptp(w.samples_uv, axis=0)
+        ms = np.arange(w.samples_uv.shape[0]) / w.sample_rate * 1000
+        for c in np.argsort(ptp)[::-1][1:4]:
+            ax_wf.plot(ms, w.samples_uv[:, c], color=t["muted"], lw=0.9)
+        ax_wf.plot(ms, w.samples_uv[:, w.peak], color=t["ink"], lw=1.6)
+        ax_wf.set_xlabel("time (ms)")
+        ax_wf.set_ylabel(f"mean waveform ({w.unit})")
+        ax_wf.set_title(
+            f"peak channel {int(w.channels[w.peak])} (black) and the next 3 by amplitude (grey)"
+            f" · {w.source}",
+            size=7,
+            color=t["ink2"],
+        )
+    else:
+        ax_wf.text(
+            0.5,
+            0.5,
+            f"No waveform: {q.waveform_missing}",
+            ha="center",
+            va="center",
+            transform=ax_wf.transAxes,
+            size=8,
+            color=t["ink2"],
+            wrap=True,
+        )
+        ax_wf.set_axis_off()
+
+    for ax in (ax_isi, ax_acg, ax_rp, ax_rate, ax_wf):
+        if ax.axison:
+            _style(ax, t)
+            ax.grid(axis="y", color=t["grid"], lw=0.6)
+            ax.set_axisbelow(True)
+    return fig
+
+
+def quality_figure(q, theme: str) -> bytes:
+    """build_quality_figure as a PNG for the page."""
+    return _png(build_quality_figure(q, theme))

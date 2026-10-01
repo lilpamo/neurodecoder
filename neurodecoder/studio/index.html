@@ -91,7 +91,19 @@
       </section>
 
       <section class="card area-unit">
-        <header><h3>Selected unit</h3></header>
+        <header><h3>Selected unit</h3>
+          <div class="seg tabs" id="unitTabs" role="group" aria-label="Unit view">
+            <button data-tab="activity" aria-pressed="true">Activity</button>
+            <button data-tab="quality" aria-pressed="false">Quality</button>
+          </div>
+        </header>
+        <div id="qualityPane" hidden>
+          <p class="caption" id="qualityCaption"></p>
+          <div class="qualityfacts" id="qualityFacts"></div>
+          <img id="qualityImg" alt="ISI histogram, autocorrelogram, refractory test, rate across the session and mean waveform">
+          <p class="err" id="qualityErr"></p>
+        </div>
+        <div id="activityPane">
         <p class="caption" id="unitCaption"></p>
         <img id="unitImg" alt="Raster and PSTH of the selected unit">
         <p class="err" id="unitErr"></p>
@@ -104,6 +116,7 @@
           <p class="caption" id="tuningCaption"></p>
           <img id="tuningImg" alt="Tuning curve of the selected unit">
           <p class="err" id="tuningErr"></p>
+        </div>
         </div>
       </section>
 

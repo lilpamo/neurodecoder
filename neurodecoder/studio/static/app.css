@@ -136,3 +136,10 @@ td.resp { text-align: center; }
 .trialhead .fails { border-color: var(--fail); color: var(--fail); }
 .trialhead .gone { flex-basis: 100%; color: var(--ink2); }
 #unitImg { cursor: pointer; }
+.card > header .tabs { margin-left: auto; font-size: 12px; }
+.qualityfacts { display: grid; gap: 4px; font-size: 12px; margin-bottom: 8px; color: var(--ink2); }
+.qualityfacts .verdict { font-weight: 600; color: var(--ink); }
+.qualityfacts .verdict.fails { color: var(--fail); }
+.qualityfacts ul { margin: 0; padding-left: 18px; }
+.qualityfacts table { width: auto; font-size: 12px; }
+.qualityfacts td, .qualityfacts th { padding: 2px 8px 2px 0; border: 0; position: static; background: none; }

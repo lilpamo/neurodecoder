@@ -6,7 +6,7 @@ import { OBJLoader } from '/static/vendor/three/OBJLoader.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { session: null, level: null, node: '', all: false, responsive: false, movementFree: false, probe: '', split: '', trials: {}, unit: null, rows: [], tree: [], popRows: null, box: null,
-  trial: null, trialNav: null, trialRows: null, trialBox: null, unitTrials: null, unitBox: null };
+  trial: null, trialNav: null, trialRows: null, trialBox: null, unitTrials: null, unitBox: null, unitTab: 'activity' };
 
 // ---------- helpers ----------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -370,7 +370,7 @@ function selectUnit(id, { scroll = true } = {}) {
 }
 
 // ---------- plots (PNGs from viz/) ----------
-const latest = { unit: 0, pop: 0, tuning: 0, wheel: 0, trial: 0 };
+const latest = { unit: 0, pop: 0, tuning: 0, wheel: 0, trial: 0, quality: 0, qualityFacts: 0 };
 async function fetchPlot(kind, url, img, caption, err) {
   const seq = ++latest[kind];
   const r = await fetch(url);
@@ -387,6 +387,7 @@ async function fetchPlot(kind, url, img, caption, err) {
   return r.headers;
 }
 async function plotUnit() {
+  if (state.unitTab === 'quality') { plotQuality(); return; }
   plotWheel();
   plotTuning();
   if (!state.unit) return;
@@ -436,6 +437,54 @@ function rowAt(img, rows, b, e) {
   return { id: rows[i], x: e.clientX - rect.left, y: e.clientY - rect.top };
 }
 const popRowAt = (e) => rowAt($('popImg'), state.popRows, state.box, e);
+
+// ---------- unit quality ----------
+// The QC verdicts already computed, shown: /api/quality (facts) and /api/quality.png.
+function renderQualityFacts(d) {
+  const yes = (ok) => (ok ? '✓' : '✗');
+  const r = d.refractory;
+  const rp = r.why ? `no refractory test: ${esc(r.why)}`
+    : `sliding refractory-period test (${Math.round(r.contamination * 100)}% contamination, ${Math.round(r.confidence * 100)}% confidence): ` +
+      (r.passed ? `passes from ${r.first_pass_rp_ms.toFixed(2)} ms` : 'fails at every period tested') +
+      (r.used_by_qc ? ' · part of this QC' : " · IBL's settings, shown for reference; this QC uses IBL's label");
+  const reasons = d.qc.reasons.length ? `<ul>${d.qc.reasons.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
+  let ibl = `<div>IBL's label criteria: ${esc(d.ibl_missing)}</div>`;
+  if (d.ibl_criteria) {
+    const c = d.ibl_criteria;
+    const passed = [c.refractory_pass, c.noise_cutoff_pass, c.amplitude_pass].filter(Boolean).length;
+    const num = (v, digits) => (v == null ? fmt(null) : v.toFixed(digits));
+    ibl = `<table><tr><th colspan="3">IBL's label ${num(c.label, 2)}: ${passed} of 3 criteria pass</th></tr>` +
+      `<tr><td>${yes(c.refractory_pass)}</td><td>refractory max confidence</td><td>${num(c.max_confidence, 0)}% (≥ 90%)</td></tr>` +
+      `<tr><td>${yes(c.noise_cutoff_pass)}</td><td>noise cutoff</td><td>${num(c.noise_cutoff, 2)} (&lt; 5)</td></tr>` +
+      `<tr><td>${yes(c.amplitude_pass)}</td><td>median amplitude</td><td>${num(c.amp_median_uv, 1)} µV (&gt; 50 µV)</td></tr></table>`;
+  }
+  $('qualityFacts').innerHTML =
+    `<div class="verdict ${d.qc.passed ? '' : 'fails'}">${d.qc.passed ? 'Passes QC' : 'Fails QC'} (${esc(d.qc.config)})</div>${reasons}` +
+    `<div>${d.n_spikes.toLocaleString()} spikes · ${d.rate_hz == null ? fmt(null) : d.rate_hz.toFixed(2) + ' Hz'} · presence ratio ${d.presence_ratio.toFixed(3)}</div>` +
+    `<div>${rp}</div>${ibl}`;
+}
+async function plotQuality() {
+  if (!state.unit) return;
+  const seq = ++latest.qualityFacts;
+  const q = params({ unit: state.unit });
+  try {
+    const d = await getJSON('/api/quality?' + q);
+    if (seq !== latest.qualityFacts) return;
+    renderQualityFacts(d);
+  } catch (e) {
+    $('qualityErr').textContent = e.message;
+    return;
+  }
+  fetchPlot('quality', '/api/quality.png?' + q, $('qualityImg'), $('qualityCaption'), $('qualityErr'));
+}
+function showUnitTab(tab) {
+  state.unitTab = tab;
+  for (const b of $('unitTabs').querySelectorAll('button')) b.setAttribute('aria-pressed', b.dataset.tab === tab);
+  $('qualityPane').hidden = tab !== 'quality';
+  $('activityPane').hidden = tab !== 'activity';
+  wheelUrl = '';  // redraw the activity plots when coming back to them
+  plotUnit();
+}
 
 // ---------- single trial ----------
 // Every number comes from /api/trial (header, navigation) and /api/trial.png (figure).
@@ -785,6 +834,10 @@ $('unitImg').addEventListener('click', (e) => {
   if (!hit) return;
   openTrial(hit.id);
   $('trialImg').closest('.card').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+});
+$('unitTabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (b && b.dataset.tab !== state.unitTab) showUnitTab(b.dataset.tab);
 });
 $('trialPrev').addEventListener('click', () => stepTrial(-1));
 $('trialNext').addEventListener('click', () => stepTrial(+1));
