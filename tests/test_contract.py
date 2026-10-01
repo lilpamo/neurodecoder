@@ -5,11 +5,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from neurodecoder.data.manifest import Manifest, manifest_versions
-from neurodecoder.evaluation.contract import ROWS, SessionData, _mean_over_folds, evaluate
-from neurodecoder.evaluation.nulls import draw_shifts
-from neurodecoder.preprocess.binning import load_preproc_config
-from neurodecoder.splits.registry import bin_range, held_out_groups, within_session
+from unitwave.data.manifest import Manifest, manifest_versions
+from unitwave.evaluation.contract import ROWS, SessionData, _mean_over_folds, evaluate
+from unitwave.evaluation.nulls import draw_shifts
+from unitwave.preprocess.binning import load_preproc_config
+from unitwave.splits.registry import bin_range, held_out_groups, within_session
 
 PREPROC = load_preproc_config()
 N_BINS, N_UNITS, CONTEXT = 600, 3, 5

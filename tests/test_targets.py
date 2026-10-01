@@ -1,11 +1,10 @@
-import os
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from neurodecoder.data.session import (
+from unitwave.data.session import (
     BEHAVIOUR_FIELDS,
     TRIAL_FIELDS,
     UNIT_FIELDS,
@@ -13,11 +12,12 @@ from neurodecoder.data.session import (
     Session,
     TimeSeries,
 )
-from neurodecoder.preprocess.binning import BinnedSpikes, PreprocConfig
-from neurodecoder.qc.units import UnitQC
-from neurodecoder.targets.bins import movement_state_from_epochs, wheel_velocity
-from neurodecoder.targets.config import TargetConfig, TrialWindow, load_target_config
-from neurodecoder.targets.trials import block, choice, movement_onsets
+from unitwave.env import env
+from unitwave.preprocess.binning import BinnedSpikes, PreprocConfig
+from unitwave.qc.units import UnitQC
+from unitwave.targets.bins import movement_state_from_epochs, wheel_velocity
+from unitwave.targets.config import TargetConfig, TrialWindow, load_target_config
+from unitwave.targets.trials import block, choice, movement_onsets
 
 PREPROC = PreprocConfig(bin_ms=20, qc=UnitQC(1.0, ("void", "root"), 0.1))
 FP = PREPROC.fingerprint()
@@ -187,7 +187,7 @@ def test_default_config_and_fingerprint():
     )
 
 
-DATA_ROOT = Path(os.environ.get("NEURODECODER_DATA_ROOT", "~/data/neurodecoder")).expanduser()
+DATA_ROOT = Path(env("DATA_ROOT", "~/data/neurodecoder")).expanduser()
 EPHYS = DATA_ROOT / "bwm_compressed/bwm_ephys/1.2.1"
 BEHAVIOUR = DATA_ROOT / "bwm_compressed/bwm_behavior/2.0.0"
 EID = "d23a44ef-1402-4ed7-97f5-47e9a7a504d9"
@@ -195,8 +195,8 @@ EID = "d23a44ef-1402-4ed7-97f5-47e9a7a504d9"
 
 @pytest.fixture(scope="module")
 def real():
-    from neurodecoder.data.backends.bwm_compressed import load_session_bwm
-    from neurodecoder.preprocess.binning import preprocess_session
+    from unitwave.data.backends.bwm_compressed import load_session_bwm
+    from unitwave.preprocess.binning import preprocess_session
 
     session = load_session_bwm(EID, EPHYS, BEHAVIOUR)
     return session, preprocess_session(session, PREPROC)
@@ -209,7 +209,7 @@ needs_bwm = pytest.mark.skipif(
 
 @needs_bwm
 def test_real_wheel_velocity_agrees_with_ibl_movement_epochs(real):
-    from neurodecoder.targets.bins import movement_state
+    from unitwave.targets.bins import movement_state
 
     session, binned = real
     v = wheel_velocity(session, binned, CFG).values

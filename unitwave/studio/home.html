@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UnitWave Studio · Choose data</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/home.css">
+<script type="importmap">
+  { "imports": { "three": "/static/vendor/three/three.module.min.js" } }
+</script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">UnitWave <span>Studio</span></div>
+  <div class="source">Choose data</div>
+  <div class="spacer"></div>
+  <a class="btn" id="backToSession" href="/session" hidden>Back to the open session</a>
+  <div class="seg" id="theme" role="group" aria-label="Theme">
+    <button data-v="auto" aria-pressed="true">Auto</button><button data-v="light">Light</button><button data-v="dark">Dark</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="rail">
+    <section>
+      <h2>Sessions</h2>
+      <label class="field">Lab <select id="lab"><option value="">Any lab</option></select></label>
+      <label class="field">Subject <select id="subject"><option value="">Any subject</option></select></label>
+      <label class="field">From <input type="date" id="dateFrom"></label>
+      <label class="field">To <input type="date" id="dateTo"></label>
+      <label class="field">Min good units <input type="number" id="minUnits" min="0" value="0"></label>
+      <label class="field">Min included trials <input type="number" id="minTrials" min="0" value="0"></label>
+      <label class="field">Probes <select id="nProbes"><option value="">Any</option></select></label>
+    </section>
+    <section>
+      <h2>Behaviour</h2>
+      <div class="checks" id="modalities"></div>
+      <p class="note">Sessions must have every signal ticked.</p>
+    </section>
+    <section class="grow">
+      <h2>Region</h2>
+      <label class="field">At least <input type="number" id="minRegionUnits" min="1"> units there</label>
+      <p class="note" id="regionNote">No region chosen. Pick one to require units there, descendants included.</p>
+      <div class="tree" id="tree"></div>
+    </section>
+  </aside>
+
+  <main>
+    <section class="card counts">
+      <div class="big" id="counts">Loading the session catalog…</div>
+      <p class="note" id="unitsNote"></p>
+    </section>
+
+    <div class="homegrid">
+      <section class="card">
+        <header><h3>Where the matching probes are</h3><span class="meta" id="overviewMeta"></span></header>
+        <div class="overview" id="overview"><div class="tip" id="overviewTip" hidden></div></div>
+        <div class="legend" id="labLegend"></div>
+      </section>
+      <section class="card entry">
+        <header><h3>Other ways in</h3></header>
+        <h4>Open a Phy folder</h4>
+        <p class="note" id="phyRoot"></p>
+        <div class="inline"><input id="phyPath" list="phyChoices" placeholder="folder under the root, e.g. mouse1/probe00" autocomplete="off"><datalist id="phyChoices"></datalist><button class="btn" id="phyOpen">Open</button></div>
+        <p class="note" id="phyMsg"></p>
+        <h4>Recent projects</h4>
+        <div class="list" id="projects"></div>
+        <h4>Session sets</h4>
+        <div class="inline"><select id="setList"><option value="">Choose a saved set</option></select><button class="btn" id="setOpen">Load</button></div>
+        <div class="inline"><input id="setName" placeholder="name for the selected sessions"><button class="btn" id="setSave">Save selected</button></div>
+        <p class="note" id="setMsg">Tick sessions in the table below, then save them as a set.</p>
+      </section>
+    </div>
+
+    <section class="card">
+      <header><h3>Trial filters</h3><span class="meta">applied to every analysis in the session you open; excluded trials are counted, never dropped silently</span></header>
+      <div class="trialfilters">
+        <label class="check"><input type="checkbox" id="tfInclude"> BWM trial inclusion only (reaction time 0.08–2 s on d23a44ef)</label>
+        <label class="check"><input type="checkbox" id="tfNogo"> Exclude no-go trials</label>
+        <div><span class="lbl">Contrasts</span> <span class="checks" id="tfContrasts"></span></div>
+        <div><span class="lbl">Blocks</span> <span class="checks" id="tfBlocks"></span></div>
+        <div><span class="lbl">Outcomes</span> <span class="checks" id="tfOutcomes"></span></div>
+      </div>
+    </section>
+
+    <section class="card area-sessions">
+      <header><h3>Matching sessions</h3><span class="meta">click a column to sort · ● in local cache (opens in seconds)</span></header>
+      <div class="table"><table>
+        <thead><tr id="heads"></tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div>
+    </section>
+  </main>
+</div>
+
+<div class="loading" id="loading" hidden><div class="panel"><div class="spinner"></div><p id="loadingText">Loading…</p></div></div>
+<script type="module" src="/static/home.js"></script>
+</body>
+</html>
