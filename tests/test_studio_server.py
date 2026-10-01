@@ -431,3 +431,45 @@ def test_a_real_monosynaptic_peak_shows_in_the_corrected_correlogram():
     peak = d["lags"][excess.argmax()]
     assert 0.0005 <= peak <= 0.002  # CA1 probe00_446 -> probe00_468, about +1 ms
     assert d["close"] is False
+
+
+LABEL_WORDS = ("responsive", "selective", "connected", "locked", "significant", "tuned")
+
+
+def test_trajectories_refuse_plainly_with_too_few_trials(tmp_path):
+    studio = _studio(tmp_path)  # 2 trials
+    with pytest.raises(ValueError, match="no condition has at least 5 trials in each half"):
+        studio.trajectory_json(PLOT)
+
+
+def test_trajectories_on_real_data_are_descriptive(tmp_path):
+    import json
+
+    from unitwave.data.load import load_data_config, load_session
+    from unitwave.qc.units import load_qc_config
+    from unitwave.studio.export import export_view
+    from unitwave.studio.project import DEFAULT_VIEW, Source
+
+    eid = "d23a44ef-1402-4ed7-97f5-47e9a7a504d9"
+    try:
+        session = load_session(eid, "bwm")
+    except (OSError, ValueError) as e:
+        pytest.skip(f"d23a44ef not available: {e}")
+    source = Source(kind="ibl", eid=eid, backend="bwm")
+    studio = Studio(session, load_qc_config(), load_data_config().data_root / "atlas", source)
+    tf = json.dumps({"bwm_include": True, "exclude_nogo": True})
+    q = {**PLOT, "all": "0", "t0": "-0.5", "t1": "1.0", "bin": "0.02", "split": "choice", "tf": tf}
+    d = studio.trajectory_json(q)
+    assert d["names"] == ["right (-1)", "left (+1)"] and d["axis_names"] == ["pc_1", "pc_2", "pc_3"]
+    assert d["n_fit"] == [108, 38] and d["n_show"] == [107, 37]
+    assert "descriptive (no test)" in d["caption"]
+    # The page shows no labels: nothing it is sent names a unit or a trajectory as one.
+    assert not any(w in json.dumps(d).lower() for w in LABEL_WORDS)
+    for dims in ("2", "3"):
+        png, _ = studio.trajectory_png({**q, "traj_dims": dims})
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    view = {**DEFAULT_VIEW, "pop_view": "trajectories", "split": "choice", "trials": json.loads(tf)}
+    out = export_view(studio, view, tmp_path / "runs")
+    sidecar = json.loads((out / "trajectories.json").read_text())
+    assert len(sidecar["units"]) == 390 and len(sidecar["components"]) == 390
+    assert {"trajectories.svg", "trajectories.pdf"} <= {p.name for p in out.iterdir()}

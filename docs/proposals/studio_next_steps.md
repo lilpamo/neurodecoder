@@ -506,7 +506,15 @@ Built (`docs/DECISIONS.md`, "Cross-correlograms and putative connections").
 - An injected 2 ms excitatory coupling is detected.
 - A same-channel pair is flagged.
 
-## 9. Population trajectories
+## 9. Population trajectories — built (2026-10-01)
+
+Built (`docs/DECISIONS.md`, "Population trajectories").
+- **As planned:** fit on alternate trials and shown on the others; axes `pc_k`;
+  no labels.
+- **Added:** soft normalisation and centring from the fit half, 30 ms smoothing,
+  and at least 5 trials per condition in each half.
+- **Variance:** the caption reports each component's share of the shown trials'
+  variance.
 
 **Adds:**
 - **Plot:** condition-averaged population activity projected on principal

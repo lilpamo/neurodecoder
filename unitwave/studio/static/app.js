@@ -6,7 +6,7 @@ import { OBJLoader } from '/static/vendor/three/OBJLoader.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { session: null, level: null, node: '', all: false, responsive: false, movementFree: false, probe: '', split: '', trials: {}, unit: null, rows: [], tree: [], popRows: null, box: null,
-  trial: null, trialNav: null, trialRows: null, trialBox: null, unitTrials: null, unitBox: null, unitTab: 'activity', partner: null, connections: null };
+  trial: null, trialNav: null, trialRows: null, trialBox: null, unitTrials: null, unitBox: null, unitTab: 'activity', partner: null, connections: null, popTab: 'heatmap', trajDims: 2 };
 
 // ---------- helpers ----------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -80,6 +80,8 @@ async function init() {
   renderTrialFilters();
   renderTrialControls(v);
   state.partner = v.partner || null;
+  state.trajDims = v.traj_dims === 3 ? 3 : 2;
+  showPopTab(v.pop_view === 'trajectories' ? 'trajectories' : 'heatmap', { plot: false });
   const c = s.correlograms;
   $('connWhat').textContent = `Spikes of each unit ${c.synaptic_window_s[0] * 1000}–${c.synaptic_window_s[1] * 1000} ms after the other's, ` +
     `against ${c.null} (an excess only: putative excitatory). Every pair of shown units, both directions, ` +
@@ -129,7 +131,7 @@ function currentView() {
     trials: state.trials, movement_free: state.movementFree,
     trial: state.trial, trial_align: $('trialAlign').value, trial_pre_s: +$('trialPre').value,
     trial_post_s: +$('trialPost').value, trial_n: trialCount(), trial_all: $('trialAll').checked,
-    trial_traces: trialTraces(), partner: state.partner,
+    trial_traces: trialTraces(), partner: state.partner, pop_view: state.popTab, traj_dims: state.trajDims,
   };
 }
 async function post(url, body) {
@@ -381,7 +383,7 @@ function selectUnit(id, { scroll = true } = {}) {
 }
 
 // ---------- plots (PNGs from viz/) ----------
-const latest = { unit: 0, pop: 0, tuning: 0, wheel: 0, trial: 0, quality: 0, qualityFacts: 0, pair: 0, pairFacts: 0 };
+const latest = { unit: 0, pop: 0, tuning: 0, wheel: 0, trial: 0, quality: 0, qualityFacts: 0, pair: 0, pairFacts: 0, traj: 0 };
 async function fetchPlot(kind, url, img, caption, err) {
   const seq = ++latest[kind];
   const r = await fetch(url);
@@ -430,7 +432,22 @@ function plotTuning() {
     fetchPlot('tuning', '/api/tuning.png?' + params({ unit: state.unit }), $('tuningImg'), $('tuningCaption'), $('tuningErr'));
   }
 }
+// ---------- population: heatmap or trajectories ----------
+// Trajectories are descriptive: the server fits components on alternate trials and
+// shows the others; the page only draws the picture it is sent.
+function showPopTab(tab, { plot = true } = {}) {
+  state.popTab = tab;
+  for (const b of $('popTabs').querySelectorAll('button')) b.setAttribute('aria-pressed', b.dataset.tab === tab);
+  for (const b of $('trajDims').querySelectorAll('button')) b.setAttribute('aria-pressed', +b.dataset.dims === state.trajDims);
+  $('heatmapPane').hidden = tab !== 'heatmap';
+  $('trajPane').hidden = tab !== 'trajectories';
+  if (plot) plotPop();
+}
 async function plotPop() {
+  if (state.popTab === 'trajectories') {
+    fetchPlot('traj', '/api/trajectories.png?' + params({ traj_dims: state.trajDims }), $('trajImg'), $('trajCaption'), $('trajErr'));
+    return;
+  }
   const h = await fetchPlot('pop', '/api/population.png?' + params(), $('popImg'), $('popCaption'), $('popErr'));
   if (h) {
     state.popRows = h.get('X-Rows').split(',');
@@ -917,6 +934,16 @@ $('unitTabs').addEventListener('click', (e) => {
   if (b && b.dataset.tab !== state.unitTab) showUnitTab(b.dataset.tab);
 });
 $('runConn').addEventListener('click', runConnections);
+$('popTabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (b && b.dataset.tab !== state.popTab) showPopTab(b.dataset.tab);
+});
+$('trajDims').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || +b.dataset.dims === state.trajDims) return;
+  state.trajDims = +b.dataset.dims;
+  showPopTab('trajectories');
+});
 $('partner').addEventListener('change', () => { state.partner = $('partner').value; plotPair(); });
 $('trialPrev').addEventListener('click', () => stepTrial(-1));
 $('trialNext').addEventListener('click', () => stepTrial(+1));

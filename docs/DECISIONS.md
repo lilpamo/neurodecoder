@@ -6,6 +6,64 @@ first.
 
 ---
 
+### 2026-10-01 — Population trajectories (`analysis/trajectories.py`, `configs/trajectories.yaml`)
+
+**What (the user's step 9):** a Trajectories tab beside Heatmap in the Population
+card.
+- **Views:** the shown units' condition-averaged activity on its principal
+  components, in pc_1–pc_2 or in 3-D, with each component plotted against time
+  below.
+- **What it uses:** the page's event, window, bins, trial filters and split (one
+  line per condition, or "all trials" without a split).
+- **Descriptive:** no statistic, no null, no label. Axes are `pc_k` (R5). The
+  caption says "descriptive (no test)", and a test checks that nothing sent to the
+  page uses label words.
+- **Saved and exported:** the tab and its dimensions are saved in the project.
+  Export adds `trajectories.svg/.pdf/.json`, with the trajectories, the components
+  and the units they belong to.
+
+**Cross-validation, the heatmap's rule:**
+- **The split:** each condition's trials are split alternately
+  (`psth.alternate_halves`). The 1st, 3rd, ... trials fit and the 2nd, 4th, ... are
+  shown.
+- **Everything learned comes from the fit half:** each unit's soft-normalisation
+  scale (rate range + 5 Hz, Churchland et al. 2012), its mean and the components.
+  The shown half is normalised, centred and projected with those numbers.
+- **Checks:** a test shows that flooding the shown trials with spikes leaves the
+  components unchanged. The caption reports each component's share of the *shown*
+  trials' variance.
+
+**Choices, flagged for review:**
+1. **Smoothing:** a Gaussian of 30 ms sigma, applied to every condition average
+   before the fit, the same on both halves.
+2. **Equal weight per condition:** conditions are averaged first, regardless of
+   their trial counts. Small conditions are therefore noisier, and a condition
+   needs at least 5 trials in each half (`configs/trajectories.yaml`). Below that it
+   is left out and named in the caption.
+3. **No baseline subtraction:** the toolbar's baseline option applies to the
+   heatmap, not here. Each unit is centred on its fit-half mean instead.
+4. **Fixed signs:** each component is flipped so its largest loading is positive,
+   so the same data always draw the same picture.
+5. **3-D uses matplotlib's own 3-D axes,** so there is no new dependency.
+
+**Checks (test-only spike trains, never shown as data):**
+- **A planted rank-2 structure is recovered on the shown trials:** pc_3 stays at
+  the noise floor, and the shown trajectories map onto the planted time courses
+  with R² of 0.99 and 0.93.
+- **What the test asserts:** the rank and the R², not a total variance share. That
+  share depends on Poisson noise: 0.70 at 60 trials per condition, 0.91 at 300.
+- **Exclusions:** too-few-trial conditions are left out and counted, and signs are
+  fixed.
+
+**Real data (d23a44ef, 390 QC-passing units, stimulus onset, BWM inclusion):**
+- **By choice:** 108 + 38 fit trials and 107 + 37 shown (right, left). Shown-trial
+  variance on pc_1–3 is 59%, 17% and 3%, against 65%, 17% and 4% on the fit half.
+- **By signed contrast (9 levels):** shown-trial variance on pc_1–3 is 48%, 12%
+  and 4%. The conditions separate after stimulus onset.
+- **Speed:** 0.5–1 s per view.
+
+**No new dependency.**
+
 ### 2026-10-01 — Rename: UnitWave Studio
 
 **Decision (the user's):** the app is renamed **UnitWave Studio**, in two parts.

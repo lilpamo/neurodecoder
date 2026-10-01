@@ -9,6 +9,8 @@ Each export is a new `runs/<run_id>/` folder (run_id = UTC time + "_studio"):
   chosen, with every spike time and event time it plots;
 - `quality.svg`, `quality.pdf`, `quality.json`: the selected unit's quality panel,
   with every count, test row and waveform sample it plots;
+- `trajectories.svg`, `trajectories.pdf`, `trajectories.json`: the population
+  trajectories, when the Population card shows them;
 - `ccg.svg`, `ccg.pdf`, `ccg.json`: the cross-correlogram with the chosen partner;
   `connections.csv` when the connection test was run on the shown units;
 - `responsiveness.csv`, when the test was run for this event (on all trials or on
@@ -41,6 +43,7 @@ from unitwave.viz.studio_plots import (
     build_ccg_figure,
     build_population_figure,
     build_quality_figure,
+    build_trajectory_figure,
     build_trial_figure,
     build_tuning_figure,
     build_unit_figure,
@@ -222,6 +225,35 @@ def export_view(studio, view: dict, runs_dir: str | os.PathLike) -> Path:
             },
         )
         files += ["quality.svg", "quality.pdf", "quality.json"]
+
+    if view.get("pop_view") == "trajectories":
+        d = studio.trajectory_data(q)
+        r = d["result"]
+        fig = build_trajectory_figure(
+            r, d["colours"], int(view.get("traj_dims", 2)), THEME, d["caption"]
+        )
+        for suffix in ("svg", "pdf"):
+            save_vector(fig, out / f"trajectories.{suffix}")
+        _write_json(
+            out / "trajectories.json",
+            {
+                "caption": d["caption"],
+                "trials": studio._trial_summary(q),
+                "conditions": r.names,
+                "n_fit": r.n_fit,
+                "n_show": r.n_show,
+                "excluded": r.excluded,
+                "axis_names": r.axis_names,
+                "bin_centers_s": r.bin_centers,
+                "trajectories": r.trajectories,  # (n_conditions, n_bins, k), shown half
+                "components": r.components,  # (n_units, k), rows in "units" order
+                "units": studio._select(q),
+                "explained_fit": r.explained_fit,
+                "explained_held_out": r.explained_held_out,
+                "config": asdict(studio.traj_cfg),
+            },
+        )
+        files += ["trajectories.svg", "trajectories.pdf", "trajectories.json"]
 
     if view.get("unit") and view.get("partner"):
         d = studio.pair_data(q)

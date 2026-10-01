@@ -135,10 +135,26 @@
       </section>
 
       <section class="card area-pop">
-        <header><h3>Population</h3></header>
-        <p class="caption" id="popCaption"></p>
-        <div class="popwrap"><img id="popImg" alt="Population heatmap"><div class="tip" id="popTip" hidden></div></div>
-        <p class="err" id="popErr"></p>
+        <header><h3>Population</h3>
+          <div class="seg tabs" id="popTabs" role="group" aria-label="Population view">
+            <button data-tab="heatmap" aria-pressed="true">Heatmap</button>
+            <button data-tab="trajectories" aria-pressed="false">Trajectories</button>
+          </div>
+        </header>
+        <div id="heatmapPane">
+          <p class="caption" id="popCaption"></p>
+          <div class="popwrap"><img id="popImg" alt="Population heatmap"><div class="tip" id="popTip" hidden></div></div>
+          <p class="err" id="popErr"></p>
+        </div>
+        <div id="trajPane" hidden>
+          <div class="seg" id="trajDims" role="group" aria-label="Trajectory dimensions">
+            <button data-dims="2" aria-pressed="true">2-D</button>
+            <button data-dims="3" aria-pressed="false">3-D</button>
+          </div>
+          <p class="caption" id="trajCaption"></p>
+          <img id="trajImg" alt="Population trajectories on principal components, shown on held-out trials">
+          <p class="err" id="trajErr"></p>
+        </div>
       </section>
 
       <section class="card area-trial">

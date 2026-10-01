@@ -76,6 +76,7 @@ from unitwave.analysis.psth import (
     selection_average,
 )
 from unitwave.analysis.responsiveness import load_response_config, responsiveness
+from unitwave.analysis.trajectories import load_trajectory_config, trajectories
 from unitwave.analysis.trial_view import (
     EVENT_COLUMNS,
     NUMBERING,
@@ -137,6 +138,7 @@ from unitwave.viz.studio_plots import (
     population_figure,
     probe_colours,
     quality_figure,
+    trajectory_figure,
     trial_figure,
     tuning_figure,
     unit_figure,
@@ -176,6 +178,7 @@ class Studio:
         self.ibl_alf = ibl_alf
         self.quality_cfg = load_quality_config()
         self.ccg_cfg = load_correlogram_config()
+        self.traj_cfg = load_trajectory_config()
         # The exact shown unit set -> connections result: BH ran over its pairs.
         self._connections: dict[tuple, pd.DataFrame] = {}
         self._ibl_criteria: dict[str, pd.DataFrame | str] = {}
@@ -1043,6 +1046,56 @@ class Studio:
             "X-Caption": quote(d["caption"])
         }
 
+    def trajectory_data(self, q: dict) -> dict:
+        """Cross-validated population trajectories of the shown units (descriptive)."""
+        ids = self._select(q)
+        if len(ids) < 2:
+            raise ValueError("trajectories need at least 2 shown units")
+        trials, sel = self._trials(q)
+        window, bin_width = (float(q["t0"]), float(q["t1"])), float(q["bin"])
+        theme, split = q.get("theme", "light"), q.get("split", "")
+        if split:
+            cond = condition(trials, split)
+            parts = [(p.name, p.times) for p in split_event_times(trials, q["event"], cond)]
+            colour_of = dict(zip(cond.names, condition_colours(split, cond.levels, theme)))
+            how = f"split by {CONDITIONS[split][0].lower()}"
+            dropped = f" · {cond.n_excluded} {cond.excluded} excluded" if cond.n_excluded else ""
+        else:
+            parts = [("all trials", trial_event_times(trials, q["event"]))]
+            colour_of = {"all trials": THEMES[theme]["series"]}
+            how, dropped = "all trials", ""
+        r = trajectories(self.session.spikes, ids, parts, window, bin_width, self.traj_cfg)
+        shown = ", ".join(f"{a} {v:.0%}" for a, v in zip(r.axis_names, r.explained_held_out))
+        not_shown = "".join(f" · {name} not shown: {why}" for name, why in r.excluded.items())
+        caption = (
+            f"{len(ids)} units ({q.get('node') or 'all regions'}) · {EVENTS[q['event']][0]} · "
+            f"{how} · principal components of condition-averaged rates, fit on alternate "
+            "trials (1st, 3rd, ...) and shown on the others · descriptive (no test) · "
+            f"variance of the shown trials on {shown}{not_shown}{dropped}"
+            f"{self._trial_note(sel)}"
+        )
+        return {"result": r, "colours": [colour_of[n] for n in r.names], "caption": caption}
+
+    def trajectory_json(self, q: dict) -> dict:
+        d = self.trajectory_data(q)
+        r = d["result"]
+        return {
+            "caption": d["caption"],
+            "names": r.names,
+            "n_fit": r.n_fit,
+            "n_show": r.n_show,
+            "excluded": r.excluded,
+            "axis_names": r.axis_names,
+            "explained_fit": r.explained_fit.tolist(),
+            "explained_held_out": r.explained_held_out.tolist(),
+        }
+
+    def trajectory_png(self, q: dict) -> tuple[bytes, dict]:
+        d = self.trajectory_data(q)
+        dims = 3 if q.get("traj_dims") == "3" else 2
+        png = trajectory_figure(d["result"], d["colours"], dims, q.get("theme", "light"))
+        return png, {"X-Caption": quote(d["caption"])}
+
     def mesh(self, structure_id: int) -> bytes:
         return mesh_path(structure_id, self.atlas_root).read_bytes()
 
@@ -1277,6 +1330,8 @@ _SESSION_ROUTES = {
     "/api/connections": ("application/json", "connections_json"),
     "/api/pair": ("application/json", "pair_json"),
     "/api/pair.png": ("image/png", "pair_png"),
+    "/api/trajectories": ("application/json", "trajectory_json"),
+    "/api/trajectories.png": ("image/png", "trajectory_png"),
     "/api/quality.png": ("image/png", "quality_png"),
     "/api/tuning.png": ("image/png", "tuning_png"),
     "/api/unit.png": ("image/png", "unit_png"),

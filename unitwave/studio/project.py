@@ -29,6 +29,7 @@ import pandas as pd
 from unitwave.analysis.correlograms import DEFAULT_CONFIG as CORRELOGRAM_CONFIG
 from unitwave.analysis.movement import DEFAULT_CONFIG as MOVEMENT_CONFIG
 from unitwave.analysis.responsiveness import DEFAULT_CONFIG as ANALYSIS_CONFIG
+from unitwave.analysis.trajectories import DEFAULT_CONFIG as TRAJECTORY_CONFIG
 from unitwave.analysis.trial_view import DEFAULT_CONFIG as TRIAL_VIEW_CONFIG
 from unitwave.analysis.trial_view import load_trial_view_config
 from unitwave.analysis.tuning import DEFAULT_CONFIG as SELECTIVITY_CONFIG
@@ -88,6 +89,10 @@ DEFAULT_VIEW = {
     "trial_traces": [],  # optional behaviour traces (analysis.trial_view.TRACES)
     # The selected unit's partner in the Pairs tab (analysis.correlograms); added later.
     "partner": None,
+    # The Population card: "heatmap" or "trajectories" (analysis.trajectories), and
+    # the trajectories' dimensions (2 or 3); added later.
+    "pop_view": "heatmap",
+    "traj_dims": 2,
 }
 
 
@@ -157,6 +162,7 @@ def _configs(qc) -> dict:
             ("movement", Path(MOVEMENT_CONFIG)),
             ("trial_view", Path(TRIAL_VIEW_CONFIG)),
             ("correlograms", Path(CORRELOGRAM_CONFIG)),
+            ("trajectories", Path(TRAJECTORY_CONFIG)),
         )
     }
 

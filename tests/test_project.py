@@ -139,6 +139,7 @@ def test_every_config_behind_a_labelled_result_is_hashed(tmp_path):
         "movement",
         "trial_view",
         "correlograms",
+        "trajectories",
     }
     assert saved["configs"]["movement"]["path"] == "configs/movement.yaml"
     # Files saved before a config was recorded say so, rather than failing to open.
